@@ -1,0 +1,8 @@
+node_modules/
+PROJECT.md
+PROGRESS.md
+failure-reports/
+.analysis/
+.github-upload/
+*.log
+.DS_Store

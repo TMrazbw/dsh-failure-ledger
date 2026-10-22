@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Failure Ledger",
+    "description": "Compresses large tool errors, records failures, and shows per-turn failure/anomaly reminders plus token savings across all DSH sessions."
+  }
+}

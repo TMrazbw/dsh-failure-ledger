@@ -1,0 +1,3 @@
+- insert:
+    - id: failure-ledger
+      name: '@local/dsh-failure-ledger'
