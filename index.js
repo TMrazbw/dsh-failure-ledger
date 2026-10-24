@@ -13,12 +13,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createAnomalyView } from './lib/anomaly.js';
+import { createAdminRoute } from './lib/admin-route.js';
 import {
   DEFAULT_REPORT_ROOT,
   normalizeHostConfig,
 } from './lib/config-schema.js';
 import { Config } from './lib/config-schema-host.js';
 import { createDigestHandler } from './lib/digest.js';
+import { createGuardHintListener, createHintQueue } from './lib/hints.js';
 import {
   createFailureInboxTool,
   createOpenPanelTool,
@@ -27,6 +29,7 @@ import {
 import { PROJECTION_KEY, createFailureLedgerProjection } from './lib/projection.js';
 import { createSnapshotRoute, buildSnapshot } from './lib/snapshot.js';
 import { createStore } from './lib/store.js';
+import { createTokenWasteGuard } from './lib/token-waste.js';
 
 export { Config, DEFAULT_REPORT_ROOT };
 
@@ -73,6 +76,9 @@ function migrateReportRoot(target, legacy) {
  */
 export function apply(ctx, config = {}) {
   const settings = resolveSettings(config);
+  const hintQueue = createHintQueue();
+  const tokenWaste = createTokenWasteGuard({ queue: hintQueue });
+  let handler = null;
   migrateReportRoot(settings.reportRoot, LEGACY_REPORT_ROOT);
   const store = createStore({
     root: settings.reportRoot,
@@ -121,18 +127,158 @@ export function apply(ctx, config = {}) {
     });
   });
 
-  ctx.inject(['connection'], (connectionCtx) => {
-    connectionCtx.effect(() => connectionCtx.connection.fetch.register(createSnapshotRoute({
-      getSnapshot: () => buildSnapshot({ store, config: resolveSettings(config) }),
-    })));
+  ctx.inject(['connection', 'settings', 'sessionQuery', 'workspaceRegistry', 'workspaceController'], (connectionCtx) => {
+    const readConfig = async () => {
+      try {
+        const descriptors = await connectionCtx.settings.describe();
+        const entry = Array.isArray(descriptors)
+          ? descriptors.find((item) => String(item.ns).endsWith('failure-ledger'))
+          : null;
+        return entry?.value && typeof entry.value === 'object'
+          ? { ...config, ...entry.value }
+          : config;
+      } catch {
+        return config;
+      }
+    };
+
+    const readSessionTitles = async (sessionIds) => {
+      try {
+        if (!Array.isArray(sessionIds) || sessionIds.length === 0) return {};
+        const results = await connectionCtx.sessionQuery.readTitleSnapshots(sessionIds);
+        const titles = {};
+        for (const result of results ?? []) {
+          if (result?.status === 'fulfilled') {
+            const title = result.value?.title?.title;
+            if (typeof title === 'string' && title.trim() !== '') {
+              titles[String(result.sessionId)] = title.trim();
+            }
+          }
+        }
+        return titles;
+      } catch {
+        return {};
+      }
+    };
+
+    const readArchivedSessionIds = async () => {
+      const controller = new AbortController();
+      try {
+        const stream = connectionCtx.workspaceController.follow(controller.signal);
+        for await (const frame of stream) {
+          if (frame?.type === 'baseline') {
+            return new Set((frame.value?.archivedSessionIds ?? []).map((id) => String(id)));
+          }
+          break;
+        }
+      } catch {
+        // An unavailable workspace stream should not hide the catalog.
+      } finally {
+        controller.abort();
+      }
+      return new Set();
+    };
+
+    const readCatalog = async () => {
+      const archived = await readArchivedSessionIds();
+      const children = new Set();
+      let records = [];
+      try {
+        records = await connectionCtx.sessionQuery.listSessions();
+        for (const record of Array.isArray(records) ? records : []) {
+          if (record?.header?.parentSession) children.add(String(record.header.id));
+        }
+      } catch {
+        records = [];
+      }
+      const seen = new Set();
+      try {
+        for (const workspace of connectionCtx.workspaceRegistry.list()) {
+          for (const sessionId of workspace?.sessionIds ?? []) {
+            const id = String(sessionId ?? '');
+            if (id && !archived.has(id) && !children.has(id)) seen.add(id);
+          }
+        }
+      } catch {
+        // Fall through to the query-backed catalog.
+      }
+      if (seen.size > 0) return [...seen].map((sessionId) => ({ sessionId }));
+      return (Array.isArray(records) ? records : [])
+        .filter((record) => !record?.header?.parentSession)
+        .map((record) => String(record?.header?.id ?? ''))
+        .filter((id) => id && !archived.has(id))
+        .map((sessionId) => ({ sessionId }));
+    };
+
+    connectionCtx.effect(() => {
+      const disposeSnapshot = connectionCtx.connection.fetch.register(createSnapshotRoute({
+        getSnapshot: async () => {
+          const catalog = await readCatalog();
+          const stats = await store.getSessionStats();
+          const ids = [...new Set([
+            ...catalog.map((row) => row.sessionId),
+            ...(stats?.sessions ?? []).map((row) => row.sessionId),
+          ])];
+          const titles = await readSessionTitles(ids);
+          const titled = catalog.filter((row) => {
+            const title = titles[String(row.sessionId)];
+            return typeof title === 'string' && title.trim() !== '';
+          });
+          const visibleCatalog = Object.keys(titles).length > 0 ? titled : catalog;
+          return buildSnapshot({
+            store,
+            config: resolveSettings(await readConfig()),
+            sessionTitles: titles,
+            sessionCatalog: visibleCatalog,
+          });
+        },
+      }));
+      const disposeAdmin = connectionCtx.connection.fetch.register(createAdminRoute({
+        store,
+        getSettings: () => connectionCtx.settings ?? null,
+        onConfigChanged: (value) => {
+          const next = resolveSettings({ ...config, ...value });
+          Object.assign(settings, next);
+          if (handler) {
+            Object.assign(handler.config, {
+              ...next.digest,
+              priceMode: next.savings.priceMode,
+              minSeverity: next.minSeverity,
+              guardObserve: next.guards.enabled,
+            });
+          }
+        },
+      }));
+      return () => {
+        disposeSnapshot();
+        disposeAdmin();
+      };
+    });
   });
 
-  const handler = createDigestHandler({
+  handler = createDigestHandler({
     store,
     config: {
       ...settings.digest,
       priceMode: settings.savings.priceMode,
       minSeverity: settings.minSeverity,
+      guardObserve: settings.guards.enabled,
+    },
+    onGuardHit: ({ session, guard }) => {
+      if (settings.guards.hint !== false && guard?.action !== 'observe') {
+        hintQueue.push(session, guard);
+      }
+    },
+    onToolResult: (exec, result, decision) => {
+      if (settings.guards.tokenWaste === false) return;
+      const sessionId = exec?.agent?.id ?? exec?.agent?.session?.id ?? null;
+      tokenWaste.observe({
+        sessionId,
+        tool: exec?.name,
+        args: exec?.arguments,
+        isError: result?.isError === true,
+        decision,
+      });
     },
     onPersisted: () => refreshInbox(store),
     onError: (error) => {
@@ -144,11 +290,22 @@ export function apply(ctx, config = {}) {
     },
   });
 
+  const guardHintListener = createGuardHintListener({
+    queue: hintQueue,
+    enabled: settings.guards.hint !== false,
+  });
+
   ctx.effect(() => {
-    const dispose = ctx.on('tools/post-execute', handler.listener);
+    const disposeTool = ctx.on('tools/post-execute', handler.listener);
+    const disposeHint = ctx.on('agent/pre-step', guardHintListener);
     return () => {
       try {
-        dispose();
+        disposeTool();
+      } catch {
+        // Ignore double disposal.
+      }
+      try {
+        disposeHint();
       } catch {
         // Ignore double disposal.
       }

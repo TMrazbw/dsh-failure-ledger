@@ -193,6 +193,19 @@ test('downstream content replacements are not overwritten', async () => {
   assert.equal(store.savings.length, 0);
 });
 
+test('tool-result callback observes both successes and failures', async () => {
+  const observed = [];
+  const handler = createDigestHandler({
+    onToolResult: (exec, result) => observed.push({ name: exec.name, isError: result.isError === true }),
+  });
+  await handler.listener(makeExec(), { isError: false, content: [{ type: 'text', text: 'ok' }] }, accept);
+  await handler.listener(makeExec({ callId: 'bad' }), failureResult(), accept);
+  assert.deepEqual(observed, [
+    { name: 'pwsh', isError: false },
+    { name: 'pwsh', isError: true },
+  ]);
+});
+
 test('successful results and synthetic aborted results are ignored', async () => {
   const store = fakeStore();
   const handler = createDigestHandler({ store });
@@ -289,9 +302,16 @@ test('a real store receives the failure, report, and savings end to end', async 
   });
   await store.init();
 
-  const handler = createDigestHandler({ store, config: { maxInlineTokens: 50 } });
+  const guardHits = [];
+  const handler = createDigestHandler({
+    store,
+    config: { maxInlineTokens: 50 },
+    onGuardHit: (hit) => guardHits.push(hit),
+  });
   const decision = await handler.listener(makeExec(), failureResult('x'.repeat(4000)), accept);
   assert.equal(decision.content.length, 1);
+  assert.equal(guardHits.length, 1);
+  assert.equal(guardHits[0].guard.id, 'sandbox-boundary');
 
   const paths = store.getPaths();
   const index = (await readFile(paths.index, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
@@ -311,4 +331,8 @@ test('a real store receives the failure, report, and savings end to end', async 
   const savings = (await readFile(paths.savings, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
   assert.equal(savings.length, 1);
   assert.ok(savings[0].savedTokens > 0);
+
+  const guardHit = JSON.parse((await readFile(paths.guardHits, 'utf8')).trim());
+  assert.equal(guardHit.guardId, 'sandbox-boundary');
+  assert.equal(guardHit.fingerprint, index[0].fingerprint);
 });

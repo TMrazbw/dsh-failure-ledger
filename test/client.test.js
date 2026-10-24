@@ -112,7 +112,7 @@ test('client registers the turn-tail reminder, main page, and sidebar entry', as
   const { module } = await loadClient();
   assert.equal(module.inject.join(','), 'slots,layout,locale,configForms,commandUi');
   const { registrations, commands, panels } = applyClient(module);
-  assert.equal(registrations.length, 4);
+  assert.equal(registrations.length, 5);
 
   const reminder = registrations.find((entry) => entry.options.id === 'failure-ledger.reminder');
   const panel = registrations.find((entry) => entry.options.name === 'main');
@@ -139,6 +139,12 @@ test('client registers the turn-tail reminder, main page, and sidebar entry', as
   assert.equal(bridge.options.order, 999);
   assert.equal(typeof bridge.component, 'function');
 
+  const stats = registrations.find((entry) => entry.options.id === 'failure-ledger.stats');
+  assert.ok(stats);
+  assert.equal(stats.options.name, 'conversation.composer.dock');
+  assert.equal(stats.options.order, -1000000);
+  assert.equal(typeof stats.component, 'function');
+
   assert.equal(commands.length, 1);
   const command = commands[0];
   assert.equal(command.name, 'dfl-ui');
@@ -150,7 +156,7 @@ test('client registers the turn-tail reminder, main page, and sidebar entry', as
   assert.deepEqual(panels, ['failure-ledger']);
 });
 
-test('the reminder renders counts and opens the panel', async () => {
+test('the turn reminder renders this turn counts and opens the panel', async () => {
   const { module } = await loadClient();
   const { registrations, panels } = applyClient(module);
   const component = registrations.find((entry) => entry.options.id === 'failure-ledger.reminder').component;
@@ -158,16 +164,16 @@ test('the reminder renders counts and opens the panel', async () => {
   const tree = component({
     useProjection(key) {
       assert.equal(key, 'failureLedger');
-      return { n1: 3, n2: 2, savedTokens: 1800 };
+      return { turnN1: 3, turnSavedTokens: 1800, n1: 12, n2: 4 };
     },
   });
 
   assert.equal(tree.type, 'button');
   const text = flatten(tree).join(' ');
-  assert.match(text, /本对话/);
+  assert.match(text, /本回合/);
   assert.match(text, /失败 3 次/);
-  assert.match(text, /异常 2 项/);
   assert.match(text, /1\.8k/);
+  assert.doesNotMatch(text, /本对话/);
   assert.match(text, /打开对话异常统计/);
   assert.match(tree.props['aria-label'], /失败 3 次/);
   assert.match(JSON.stringify(tree.props.style), /--dsw-alias-label-secondary/);
@@ -177,19 +183,16 @@ test('the reminder renders counts and opens the panel', async () => {
   tree.props.onClick();
   assert.deepEqual(panels, ['failure-ledger', 'failure-ledger']);
 
-  const wrapped = component({ useProjection: () => ({ value: { n1: 1, n2: 0, savedTokens: 0 } }) });
+  const wrapped = component({ useProjection: () => ({ value: { turnN1: 1, turnSavedTokens: 0 } }) });
   assert.match(flatten(wrapped).join(' '), /失败 1 次/);
-
-  const observable = component({ useProjection: () => ({ getSnapshot: () => ({ n1: 0, n2: 2, savedTokens: 0 }) }) });
-  assert.match(flatten(observable).join(' '), /异常 2 项/);
 });
 
-test('the reminder renders nothing without failures or anomalies', async () => {
+test('the turn reminder ignores cumulative-only data', async () => {
   const { module } = await loadClient();
   const { registrations } = applyClient(module);
   const component = registrations.find((entry) => entry.options.id === 'failure-ledger.reminder').component;
 
-  assert.equal(component({ useProjection: () => ({ n1: 0, n2: 0 }) }), null);
+  assert.equal(component({ useProjection: () => ({ turnN1: 0, turnSavedTokens: 0, n1: 9, n2: 3, savedTokens: 100 }) }), null);
   assert.equal(component({ useProjection: () => null }), null);
   assert.equal(component({}), null);
   assert.equal(component({ useProjection: () => { throw new Error('projection unavailable'); } }), null);
@@ -200,13 +203,28 @@ test('the reminder follows the active locale', async () => {
   const { registrations } = applyClient(module, { locale: 'en-US' });
   const component = registrations.find((entry) => entry.options.id === 'failure-ledger.reminder').component;
   const tree = component({
-    useProjection: () => ({ n1: 3, n2: 2, savedTokens: 1800 }),
+    useProjection: () => ({ turnN1: 3, turnSavedTokens: 1800 }),
   });
   const text = flatten(tree).join(' ');
-  assert.match(text, /This conversation/);
+  assert.match(text, /This turn/);
   assert.match(text, /3 failed/);
-  assert.match(text, /2 anomalies/);
   assert.match(text, /Open Conversation Anomaly Stats/);
+});
+
+test('the composer stats show cumulative session data', async () => {
+  const { module } = await loadClient();
+  const { registrations } = applyClient(module);
+  const component = registrations.find((entry) => entry.options.id === 'failure-ledger.stats').component;
+  const tree = component({
+    useProjection: () => ({ n1: 5, n2: 2, savedTokens: 900 }),
+  });
+  const text = flatten(tree).join(' ');
+  assert.match(text, /失败 5/);
+  assert.match(text, /异常 2/);
+  assert.match(text, /900/);
+  assert.doesNotMatch(text, /本对话/);
+  assert.doesNotMatch(JSON.stringify(tree.props.style), /marginLeft/);
+  assert.equal(component({ useProjection: () => ({ n1: 0, n2: 0, savedTokens: 0 }) }), null);
 });
 
 test('the panel bridge opens on a new panel request only', async () => {

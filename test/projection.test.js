@@ -154,6 +154,23 @@ test('failed turns count as one failure with a classified category', () => {
   assert.equal(state.failuresByTool.turn, 1);
 });
 
+test('turn counters reset at the next turn while cumulative counters remain', () => {
+  let state = fold({ id: 's1' }, [
+    ev('turn/start', { turn: 1 }, 1),
+    ev('step/start', { turn: 1, step: 1 }, 2),
+    call(3, 'c1'),
+    failure(4, 'c1'),
+  ]);
+  let view = createAnomalyView(state);
+  assert.equal(view.turnN1, 1);
+  assert.equal(view.n1, 1);
+
+  state = applyAnomalyEvent(state, ev('turn/start', { turn: 2 }, 5));
+  view = createAnomalyView(state);
+  assert.equal(view.turnN1, 0);
+  assert.equal(view.n1, 1);
+});
+
 test('aggregateSessionStats sums parent and child sessions once each', () => {
   const parent = createAnomalyView(fold({ id: 'parent', createdAt: T }, [
     ev('turn/start', { turn: 1 }, 1),

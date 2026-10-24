@@ -22,6 +22,7 @@ window.__ModuleLoader__.load({
     const PANEL_ID = 'failure-ledger';
     const CONFIG_ENTRY = 'failure-ledger';
     const SNAPSHOT_URL = 'api/failure-ledger.snapshot';
+    const ADMIN_URL = 'api/failure-ledger.admin';
 
     const RULE_ROWS = [
       ['repeatFailure', '重复失败', 'Repeated failure', [
@@ -69,18 +70,16 @@ window.__ModuleLoader__.load({
         projection = null;
       }
 
-      const n1 = toCount(projection?.n1);
-      const n2 = toCount(projection?.n2);
-      if (n1 === 0 && n2 === 0) return null;
+      const n1 = toCount(projection?.turnN1);
+      const savedTokens = toCount(projection?.turnSavedTokens);
+      if (n1 === 0 && savedTokens === 0) return null;
 
-      const savedTokens = toCount(projection?.savedTokens);
       const parts = [];
       if (n1 > 0) parts.push(translate(`失败 ${n1} 次`, `${n1} failed`));
-      if (n2 > 0) parts.push(translate(`异常 ${n2} 项`, `${n2} anomalies`));
       if (savedTokens > 0) {
         parts.push(translate(`节省 ~${formatTokens(savedTokens)} tokens`, `~${formatTokens(savedTokens)} tokens saved`));
       }
-      const summary = `${translate('本对话累计：', 'This conversation so far: ')}${parts.join(' · ')}`;
+      const summary = `${translate('本回合：', 'This turn: ')}${parts.join(' · ')}`;
       const action = translate('打开对话异常统计', 'Open Conversation Anomaly Stats');
 
       return h('button', {
@@ -149,6 +148,56 @@ window.__ModuleLoader__.load({
       h('circle', { cx: 18, cy: 20, r: 0.8, fill: 'currentColor', stroke: 'none' }));
     }
 
+    function ComposerStats(props) {
+      let projection = null;
+      try {
+        if (typeof props.useProjection === 'function') projection = unwrapProjection(props.useProjection('failureLedger'));
+      } catch {
+        projection = null;
+      }
+      const n1 = toCount(projection?.n1);
+      const n2 = toCount(projection?.n2);
+      const savedTokens = toCount(projection?.savedTokens);
+      if (n1 === 0 && n2 === 0 && savedTokens === 0) return null;
+      return h('button', {
+        type: 'button',
+        title: translate('打开对话异常统计面板', 'Open the Conversation Anomaly Stats panel'),
+        onClick(event) {
+          try {
+            event?.preventDefault?.();
+          } catch {
+            // Ignore a missing event.
+          }
+          try {
+            activeLayout?.selectPanel(PANEL_ID);
+          } catch {
+            // Opening the panel is best-effort.
+          }
+        },
+        style: {
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '4px',
+          maxWidth: '100%',
+          alignSelf: 'flex-end',
+          padding: '2px 6px',
+          border: '1px solid var(--dsw-alias-border-l1)',
+          borderRadius: '6px',
+          background: 'transparent',
+          color: 'var(--dsw-alias-label-secondary)',
+          cursor: 'pointer',
+          font: 'inherit',
+          fontSize: '11px',
+          lineHeight: '1.4',
+          whiteSpace: 'nowrap',
+        },
+      }, translate(
+        `失败 ${n1} · 异常 ${n2} · 节省 ${formatTokens(savedTokens)}`,
+        `${n1} failed · ${n2} anomalies · ${formatTokens(savedTokens)} saved`,
+      ));
+    }
+
+
     function PanelBridge(props) {
       let request = 0;
       try {
@@ -185,6 +234,12 @@ window.__ModuleLoader__.load({
       const [draft, setDraft] = useState(null);
       const [saving, setSaving] = useState(false);
       const [savedAt, setSavedAt] = useState(null);
+      const [selectedSession, setSelectedSession] = useState('');
+      const [selectedStatsSession, setSelectedStatsSession] = useState('');
+      const [copied, setCopied] = useState(false);
+      const [guardDraft, setGuardDraft] = useState(null);
+      const [guardSaving, setGuardSaving] = useState(false);
+      const [guardError, setGuardError] = useState(null);
 
       async function load() {
         setLoading(true);
@@ -235,39 +290,159 @@ window.__ModuleLoader__.load({
       }, [snapshot, formState?.value]);
 
       const totals = snapshot?.totals ?? {};
-      const writable = formState?.writable === true;
-      const formStatus = formState?.status ?? 'unavailable';
+      const sessionStats = snapshot?.sessionStats ?? [];
+      const selectedStats = sessionStats.find((row) => row.sessionId === selectedStatsSession)
+        ?? sessionStats[0]
+        ?? null;
+      const writable = snapshot != null;
       const rules = mergeRules(snapshot?.rules, draft?.rules);
       const digest = { ...(snapshot?.config?.digest ?? {}), ...(draft?.digest ?? {}) };
       const savings = { ...(snapshot?.config?.savings ?? {}), ...(draft?.savings ?? {}) };
       const minSeverity = draft?.minSeverity ?? snapshot?.config?.minSeverity ?? 'medium';
+      const allFailures = snapshot?.failures ?? [];
+      const sessionIds = [...new Set(allFailures.map((row) => row.session).filter(Boolean))];
+      const sessionFailures = selectedSession
+        ? allFailures.filter((row) => row.session === selectedSession)
+        : [];
+      const sessionCategories = [...sessionFailures.reduce((map, row) => {
+        map.set(row.category, (map.get(row.category) ?? 0) + 1);
+        return map;
+      }, new Map()).entries()];
+      const sessionAnomalies = selectedSession
+        ? (snapshot?.anomalies ?? []).filter((row) => row.session === selectedSession)
+        : [];
+      const coverage = snapshot?.guardCoverage ?? {};
+      const unresolvedGroups = Array.isArray(snapshot?.unresolvedGroups)
+        ? snapshot.unresolvedGroups
+        : groupFailureRows(snapshot?.failures ?? []);
+      const recentFailures = snapshot?.recentFailures ?? snapshot?.failures ?? [];
+
+      async function copyUnresolved() {
+        if (!navigator?.clipboard?.writeText) return;
+        const lines = [`待解决失败（${unresolvedGroups.length} 个指纹）`];
+        unresolvedGroups.slice(0, 20).forEach((group, index) => {
+          lines.push(`${index + 1}. ${group.fingerprint} | ${group.tool}/${group.category} | ${group.count} 条 | 最近 ${formatTime(group.lastSeen)} | ${group.report ?? ''}`);
+        });
+        try {
+          await navigator.clipboard.writeText(lines.join('\n'));
+          setCopied(true);
+        } catch {
+          setCopied(false);
+        }
+      }
 
       const update = (path, value) => {
         setDraft((current) => setIn(current ?? {}, path, value));
         setSavedAt(null);
       };
 
+      async function postAdmin(payload) {
+        const response = await fetch(ADMIN_URL, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'content-type': 'application/json', accept: 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || data?.ok !== true) {
+          throw new Error(data?.error ?? data?.message ?? `admin HTTP ${response.status}`);
+        }
+        return data;
+      }
+
       async function save() {
-        const form = getForm();
-        const current = form?.getSnapshot?.();
-        if (!form || !current?.writable || !draft) return;
+        if (!draft) return;
         setSaving(true);
         setError(null);
         try {
           const ops = CONFIG_PATHS
             .map((path) => ({ op: 'set', path, value: getIn(draft, path) }))
             .filter((operation) => operation.value !== undefined);
-          const accepted = await form.mutate(ops, current.revision);
-          if (!accepted) {
-            setError(translate('保存被拒绝（可能有并发修改），已刷新表单。', 'Save was rejected (possibly a concurrent edit); the form was refreshed.'));
-          } else {
-            setSavedAt(new Date());
-            await load();
-          }
+          await postAdmin({ action: 'config', ops });
+          setSavedAt(new Date());
+          await load();
         } catch (cause) {
           setError(errorText(cause));
         } finally {
           setSaving(false);
+        }
+      }
+
+      function startNewGuard() {
+        setGuardError(null);
+        setGuardDraft({
+          id: `custom-${Date.now().toString(36)}`,
+          label: '',
+          tool: '',
+          category: '',
+          code: '',
+          hint: '',
+          action: 'hint',
+          mode: 'observe',
+          enabled: true,
+          isNew: true,
+        });
+      }
+
+      function startEditGuard(guard) {
+        setGuardError(null);
+        setGuardDraft({
+          id: guard.id,
+          label: guard.label ?? '',
+          tool: guard.tool ?? '',
+          category: guard.category ?? '',
+          code: guard.code ?? '',
+          hint: guard.hint ?? '',
+          action: guard.action ?? 'hint',
+          mode: guard.mode ?? 'observe',
+          enabled: guard.enabled !== false,
+          isNew: false,
+        });
+      }
+
+      function setGuardField(field, value) {
+        setGuardDraft((current) => (current ? { ...current, [field]: value } : current));
+      }
+
+      async function saveGuard() {
+        if (!guardDraft) return;
+        setGuardSaving(true);
+        setGuardError(null);
+        try {
+          await postAdmin({
+            action: 'saveGuard',
+            guard: {
+              id: guardDraft.id,
+              label: guardDraft.label,
+              tool: guardDraft.tool,
+              category: guardDraft.category,
+              code: guardDraft.code,
+              hint: guardDraft.hint,
+              action: guardDraft.action,
+              enabled: guardDraft.enabled,
+            },
+          });
+          setGuardDraft(null);
+          await load();
+        } catch (cause) {
+          setGuardError(errorText(cause));
+        } finally {
+          setGuardSaving(false);
+        }
+      }
+
+      async function deleteGuard() {
+        if (!guardDraft || guardDraft.isNew) return;
+        setGuardSaving(true);
+        setGuardError(null);
+        try {
+          await postAdmin({ action: 'deleteGuard', id: guardDraft.id });
+          setGuardDraft(null);
+          await load();
+        } catch (cause) {
+          setGuardError(errorText(cause));
+        } finally {
+          setGuardSaving(false);
         }
       }
 
@@ -301,7 +476,7 @@ window.__ModuleLoader__.load({
         loading && snapshot == null ? h('p', { style: styles.muted }, translate('加载中…', 'Loading…')) : null,
         error ? h('p', { style: styles.error, role: 'alert' }, error) : null,
         savedAt ? h('p', { style: styles.muted }, translate('已保存。', 'Saved.')) : null,
-        snapshot == null ? null : h('div', null,
+        snapshot == null ? null : h('div', { style: { display: 'flex', flexDirection: 'column' } },
           h('div', { style: styles.grid },
             card(translate('累计节省', 'Saved tokens'), formatTokens(totals.savedTokens ?? 0)),
             card(translate('预计节省', 'Estimated saved'), formatCNY(snapshot.estimatedCNY ?? 0)),
@@ -310,6 +485,135 @@ window.__ModuleLoader__.load({
             card(translate('异常项', 'Anomalies'), String(totals.anomalies ?? 0)),
             card(translate('压缩次数', 'Compressions'), String(totals.compressions ?? 0)),
             card(translate('覆盖会话', 'Sessions'), String(snapshot.sessions ?? 0))),
+          section(translate('对话累计（整体）', 'Conversation totals'),
+            sessionStats.length === 0
+              ? h('p', { style: styles.muted }, translate('暂无会话累计数据', 'No conversation totals yet'))
+              : h('div', null,
+                h('div', { style: styles.row },
+                  h('select', {
+                    style: styles.select,
+                    value: selectedStats?.sessionId ?? '',
+                    onChange: (event) => setSelectedStatsSession(event.target.value),
+                    'aria-label': translate('选择对话', 'Select conversation'),
+                  },
+                  sessionStats.map((row) => h('option', {
+                    key: row.sessionId,
+                    value: row.sessionId,
+                  }, row.title || shortId(row.sessionId))))),
+                selectedStats ? table(
+                  [translate('对话', 'Conversation'), translate('失败', 'Failures'), translate('异常', 'Anomalies'), translate('节省 tokens', 'Saved tokens')],
+                  [[
+                    selectedStats.title || shortId(selectedStats.sessionId),
+                    selectedStats.failures ?? 0,
+                    selectedStats.anomalies ?? 0,
+                    formatTokens(selectedStats.savedTokens ?? 0),
+                  ]],
+                  '',
+                ) : null)),
+          section(translate('待解决失败（按指纹）', 'Open failures by fingerprint'),
+            h('div', { style: styles.row },
+              h('p', { style: styles.muted }, translate(
+                '这些是当前还需要处理的失败；把指纹或报告发我即可。',
+                'These failures still need work; send me a fingerprint or report to resolve.',
+              )),
+              unresolvedGroups.length > 0 ? h('button', {
+                type: 'button',
+                style: styles.button,
+                onClick: () => void copyUnresolved(),
+              }, copied ? translate('已复制', 'Copied') : translate('复制待解决清单', 'Copy open list')) : null),
+            table(
+              [translate('指纹', 'Fingerprint'), translate('工具/类别', 'Tool/category'), translate('次数', 'Count'), translate('最近', 'Last'), translate('报告', 'Report')],
+              unresolvedGroups.slice(0, 12).map((group) => [
+                group.fingerprint,
+                `${group.tool}/${group.category}`,
+                group.count,
+                formatTime(group.lastSeen),
+                group.report ?? '—',
+              ]),
+              translate('没有未解决失败', 'No open failures'),
+            )),
+          section(translate('最近失败（含已解决状态）', 'Recent failures (with status)'),
+            table(
+              [translate('ID', 'ID'), translate('工具', 'Tool'), translate('类别', 'Category'), translate('状态', 'Status'), translate('时间', 'Time'), translate('报告', 'Report')],
+              recentFailures.slice(0, 10).map((row) => [
+                row.id,
+                row.tool,
+                row.category,
+                row.resolved ? translate('已解决', 'Resolved') : translate('未解决', 'Open'),
+                formatTime(row.time),
+                row.resolved ? '—' : row.report,
+              ]),
+              translate('暂无失败', 'No failures yet'),
+            ),
+            h('p', { style: styles.muted }, translate(
+              '最近 10 条包含已解决记录；已解决的报告/raw 已清理，只保留索引与统计。',
+              'The latest 10 include resolved records; resolved reports/raw are deleted and only the index remains.',
+            ))),
+          h('details', { style: { ...styles.details, order: 3 } },
+            h('summary', { style: styles.summary }, translate(
+              '诊断与统计（Guard / 会话 / 错误源 / 节省）',
+              'Diagnostics (guards / sessions / sources / savings)',
+            )),
+            h('p', { style: styles.muted }, translate(
+              `Guard 覆盖：${coverage.coveredFingerprints ?? 0}/${coverage.unresolvedFingerprints ?? 0} 个未解决指纹（${coverage.percent ?? 0}%）。`,
+              `Guard coverage: ${coverage.coveredFingerprints ?? 0}/${coverage.unresolvedFingerprints ?? 0} open fingerprints (${coverage.percent ?? 0}%).`,
+            )),
+          section(translate('会话下钻', 'Session drill-down'),
+            h('p', { style: styles.muted }, translate(
+              '按一次对话/子代理过滤全局失败，查看它当时失败的工具、类别和时间线；不是新的全局统计。',
+              'Filter the global ledger to one conversation/subagent to inspect its failed tools, categories, and timeline. It is a filter, not another global metric.',
+            )),
+            h('div', { style: styles.row },
+              h('select', {
+                style: styles.select,
+                value: selectedSession,
+                onChange: (event) => setSelectedSession(event.target.value),
+                'aria-label': translate('选择会话', 'Select session'),
+              },
+              h('option', { value: '' }, translate('选择会话…', 'Select a session…')),
+              sessionIds.map((id) => h('option', { key: id, value: id }, shortId(id)))),
+              selectedSession ? h('button', {
+                type: 'button',
+                style: styles.button,
+                onClick: () => setSelectedSession(''),
+              }, translate('清除', 'Clear')) : null),
+            selectedSession
+              ? h('div', null,
+                h('p', { style: styles.muted }, translate(
+                  `${shortId(selectedSession)} · ${sessionFailures.length} 条失败 · ${sessionCategories.map(([key, value]) => `${key}:${value}`).join(' · ') || '无分类'}`,
+                  `${shortId(selectedSession)} · ${sessionFailures.length} failures · ${sessionCategories.map(([key, value]) => `${key}:${value}`).join(' · ') || 'no categories'}`,
+                )),
+                h('p', { style: styles.muted }, translate(
+                  `时间线（最近 ${Math.min(sessionFailures.length, 20)} 条）`,
+                  `Timeline (latest ${Math.min(sessionFailures.length, 20)})`,
+                )),
+                table(
+                  [translate('时间', 'Time'), translate('工具', 'Tool'), translate('类别', 'Category'), translate('严重度', 'Severity'), translate('报告', 'Report')],
+                  sessionFailures.slice(0, 20).map((row) => [
+                    formatTime(row.time),
+                    row.tool,
+                    row.category,
+                    row.severity,
+                    row.report,
+                  ]),
+                  translate('该会话暂无失败', 'No failures in this session'),
+                ),
+                sessionAnomalies.length > 0
+                  ? table(
+                    [translate('规则', 'Rule'), translate('次数', 'Count'), translate('浪费 tokens', 'Wasted'), translate('时间', 'Time')],
+                    sessionAnomalies.slice(0, 10).map((row) => [
+                      row.ruleId,
+                      row.count,
+                      formatTokens(row.wastedTokens),
+                      formatTime(row.time),
+                    ]),
+                    '',
+                  )
+                  : null)
+              : h('p', { style: styles.muted }, translate(
+                '选择会话查看失败时间线；当前快照最多 500 条。',
+                'Select a session to inspect its failure timeline; the snapshot keeps up to 500 entries.',
+              ))),
           section(translate('错误源', 'Error sources'),
             h('div', { style: styles.twoCols },
               table(
@@ -322,6 +626,48 @@ window.__ModuleLoader__.load({
                 categoryRows.map((row) => [row.category, row.failures]),
                 translate('暂无类别统计', 'No category stats'),
               ))),
+          section(translate('防复发 Guard（观察+提示）', 'Guards (observe + hint)'),
+            table(
+              [
+                translate('Guard', 'Guard'),
+                translate('匹配', 'Match'),
+                translate('模式', 'Mode'),
+                translate('命中', 'Hits'),
+                translate('最近', 'Last'),
+              ],
+              (snapshot.guards ?? []).map((guard) => [
+                guard.label,
+                [guard.fingerprint ? `fp:${guard.fingerprint}` : null, guard.tool, guard.category, guard.code].filter(Boolean).join(' · ') || '—',
+                guard.mode,
+                guard.hits,
+                formatTime(guard.lastHitAt),
+              ]),
+              translate('暂无 Guard', 'No guards'),
+            ),
+            h('p', { style: styles.muted }, translate(
+              `命中 ${coverage.guardHits ?? 0} 次；已解决固化 ${coverage.resolvedGuarded ?? 0}/${coverage.resolvedFingerprints ?? 0}（${coverage.resolvedPercent ?? 0}%）；Step 2 只提示，不阻断。`,
+              `${coverage.guardHits ?? 0} hits; resolved fixes guarded ${coverage.resolvedGuarded ?? 0}/${coverage.resolvedFingerprints ?? 0} (${coverage.resolvedPercent ?? 0}%); hints only, never blocks.`,
+            ))),
+          section(translate('修复库（playbook）', 'Playbook'),
+            table(
+              [
+                translate('指纹', 'Fingerprint'),
+                translate('修复', 'Fix'),
+                translate('固化', 'Guarded'),
+                translate('解决时间', 'Resolved'),
+              ],
+              (snapshot.playbook ?? []).slice(0, 10).map((row) => [
+                row.fingerprint,
+                String(row.fix ?? '').slice(0, 140),
+                row.guardId ? translate('已固化', 'Guarded') : translate('未固化', 'Not guarded'),
+                formatTime(row.resolvedAt),
+              ]),
+              translate('暂无已解决修复', 'No resolved fixes yet'),
+            ),
+            h('p', { style: styles.muted }, translate(
+              '模型可用 failure_inbox action="playbook" 检索修复；resolve 时自动生成 learned Guard 和 regressions/<指纹>.md 草案。',
+              'The model can retrieve fixes with failure_inbox action="playbook"; resolve creates a learned Guard and a regressions/<fingerprint>.md draft.',
+            ))),
           section(translate('异常明细（最近）', 'Recent anomalies'),
             table(
               [translate('规则', 'Rule'), translate('次数', 'Count'), translate('浪费 tokens', 'Wasted'), translate('会话', 'Session'), translate('时间', 'Time')],
@@ -349,29 +695,115 @@ window.__ModuleLoader__.load({
               `价格来源：${snapshot.pricing?.source ?? 'DeepSeek 官方价'}（抓取 ${snapshot.pricing?.fetchedAt ?? '-'}），模式 ${snapshot.pricing?.mode ?? '-'}；金额只读、保守估算。`,
               `Price source: ${snapshot.pricing?.source ?? 'DeepSeek pricing'} (fetched ${snapshot.pricing?.fetchedAt ?? '-'}), mode ${snapshot.pricing?.mode ?? '-'}; read-only and conservative.`,
             ))),
-          section(translate('最近失败', 'Recent failures'),
-            table(
-              [translate('ID', 'ID'), translate('工具', 'Tool'), translate('类别', 'Category'), translate('严重度', 'Severity'), translate('时间', 'Time'), translate('报告', 'Report')],
-              (snapshot.failures ?? []).slice(0, 10).map((row) => [
-                row.id,
-                row.tool,
-                row.category,
-                row.severity,
-                formatTime(row.time),
-                row.report,
-              ]),
-              translate('暂无失败', 'No failures yet'),
-            ),
           ),
-          section(translate('规则与参数', 'Rules and parameters'),
-            formStatus !== 'ready' || !writable
+          h('div', { style: { ...styles.details, order: 2 } },
+            section(translate('Guard 规则（查看 / 修改 / 新建）', 'Guard rules (view / edit / create)'),
+              h('div', { style: styles.row },
+                h('p', { style: styles.muted }, translate(
+                  'Guard 在失败后记录命中，并在下一步给出一行提示；新建规则默认 observe、不阻断。',
+                  'Guards record hits after failures and inject one hint on the next step; new rules default to observe and never block.',
+                )),
+                h('button', { type: 'button', style: styles.button, onClick: startNewGuard }, translate('新建 Guard', 'New guard'))),
+              guardError ? h('p', { style: styles.error, role: 'alert' }, guardError) : null,
+              guardDraft ? h('div', { style: styles.guardForm },
+                h('div', { style: styles.formGrid },
+                  h('label', { style: styles.row },
+                    h('span', null, 'ID'),
+                    h('input', {
+                      style: { ...styles.input, width: '100%' },
+                      value: guardDraft.id,
+                      disabled: !guardDraft.isNew,
+                      onInput: (event) => setGuardField('id', event.target.value),
+                    })),
+                  h('label', { style: styles.row },
+                    h('span', null, translate('名称', 'Label')),
+                    h('input', {
+                      style: { ...styles.input, width: '100%' },
+                      value: guardDraft.label,
+                      onInput: (event) => setGuardField('label', event.target.value),
+                    })),
+                  h('label', { style: styles.row },
+                    h('span', null, 'tool'),
+                    h('input', {
+                      style: { ...styles.input, width: '100%' },
+                      value: guardDraft.tool,
+                      onInput: (event) => setGuardField('tool', event.target.value),
+                    })),
+                  h('label', { style: styles.row },
+                    h('span', null, 'category'),
+                    h('input', {
+                      style: { ...styles.input, width: '100%' },
+                      value: guardDraft.category,
+                      onInput: (event) => setGuardField('category', event.target.value),
+                    })),
+                  h('label', { style: styles.row },
+                    h('span', null, 'code'),
+                    h('input', {
+                      style: { ...styles.input, width: '100%' },
+                      value: guardDraft.code,
+                      onInput: (event) => setGuardField('code', event.target.value),
+                    })),
+                ),
+                h('label', { style: styles.row },
+                  h('span', null, translate('提示文本', 'Hint')),
+                  h('textarea', {
+                    style: { ...styles.input, width: '100%', minHeight: '56px' },
+                    value: guardDraft.hint,
+                    onInput: (event) => setGuardField('hint', event.target.value),
+                  })),
+                h('div', { style: styles.row },
+                  checkbox(translate('启用', 'Enabled'), guardDraft.enabled, (value) => setGuardField('enabled', value), false),
+                  selectField(translate('动作', 'Action'), guardDraft.action, [
+                    ['hint', translate('提示（默认）', 'Hint (default)')],
+                    ['observe', translate('只观察', 'Observe only')],
+                  ], (value) => setGuardField('action', value), false),
+                  h('span', { style: styles.muted }, translate('模式：observe；不阻断', 'Mode: observe; no blocking')),
+                ),
+                h('div', { style: styles.row },
+                  h('button', {
+                    type: 'button',
+                    style: { ...styles.button, opacity: guardSaving ? 0.5 : 1 },
+                    disabled: guardSaving,
+                    onClick: () => void saveGuard(),
+                  }, guardSaving ? translate('保存中…', 'Saving…') : translate('保存 Guard', 'Save guard')),
+                  h('button', {
+                    type: 'button',
+                    style: styles.button,
+                    disabled: guardSaving,
+                    onClick: () => setGuardDraft(null),
+                  }, translate('取消', 'Cancel')),
+                  !guardDraft.isNew ? h('button', {
+                    type: 'button',
+                    style: styles.button,
+                    disabled: guardSaving,
+                    onClick: () => void deleteGuard(),
+                  }, translate('删除自定义 Guard', 'Delete custom guard')) : null),
+              ) : null,
+              table(
+                [translate('Guard', 'Guard'), translate('ID', 'ID'), translate('匹配', 'Match'), translate('启用', 'On'), translate('命中', 'Hits'), translate('操作', 'Action')],
+                (snapshot.guards ?? []).map((guard) => [
+                  guard.label,
+                  guard.id,
+                  [guard.tool, guard.category, guard.code].filter(Boolean).join(' · ') || '—',
+                  guard.enabled === false ? '—' : '✓',
+                  guard.hits,
+                  h('button', {
+                    type: 'button',
+                    style: styles.button,
+                    onClick: () => startEditGuard(guard),
+                  }, translate('编辑', 'Edit')),
+                ]),
+                translate('暂无 Guard', 'No guards'),
+              )),
+            section(translate('规则与参数', 'Rules and parameters'),
+            writable
               ? h('p', { style: styles.muted }, translate(
-                `参数表单不可用（状态：${formStatus}）。仍可查看上方只读统计。`,
-                `Parameter form unavailable (status: ${formStatus}). Read-only statistics above still apply.`,
+                '修改后点顶部“保存参数”；保存后重新读取 Host 配置。',
+                'Edit, then use “Save parameters” at the top; the Host config is reloaded afterwards.',
               ))
               : h('p', { style: styles.muted }, translate(
-                '修改后点“保存参数”写入 profile 配置；保存前会重新读取 revision。',
-                'Edits are written to the profile configuration by “Save parameters”; the revision is re-read before writing.',
+                '参数暂不可写，请稍后刷新。',
+                'Parameters are not writable yet; refresh later.',
               )),
             h('div', { style: styles.formGrid },
               h('div', { style: styles.card },
@@ -411,7 +843,7 @@ window.__ModuleLoader__.load({
                     !writable,
                     true,
                   )));
-              }))),
+              })))),
         ),
       );
     }
@@ -422,10 +854,10 @@ window.__ModuleLoader__.load({
         h('div', { style: styles.cardValue }, value));
     }
 
-    function section(title, content) {
+    function section(title, ...content) {
       return h('section', { style: styles.section },
         h('h2', { style: styles.sectionTitle }, title),
-        content);
+        ...content);
     }
 
     function table(headers, rows, emptyText) {
@@ -434,7 +866,12 @@ window.__ModuleLoader__.load({
         h('table', { style: styles.table },
           h('thead', null, h('tr', null, ...headers.map((header) => h('th', { key: header, style: styles.th }, header)))),
           h('tbody', null, ...rows.map((row, index) => h('tr', { key: index },
-            ...row.map((cell, cellIndex) => h('td', { key: cellIndex, style: styles.td }, cellText(cell))))))));
+            ...row.map((cell, cellIndex) => h('td', { key: cellIndex, style: styles.td }, isElement(cell) ? cell : cellText(cell))))))));
+    }
+
+    function isElement(value) {
+      return value != null && typeof value === 'object'
+        && (value.$$typeof != null || typeof value.type === 'string' || typeof value.type === 'function');
     }
 
     function checkbox(label, value, onChange, disabled) {
@@ -520,6 +957,12 @@ window.__ModuleLoader__.load({
 
         ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
           name: 'conversation.composer.dock',
+          id: 'failure-ledger.stats',
+          order: -1000000,
+        }, ComposerStats));
+
+        ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
+          name: 'conversation.composer.dock',
           id: 'failure-ledger.bridge',
           order: 999,
         }, PanelBridge));
@@ -594,9 +1037,24 @@ const styles = {
   cardLabel: { fontSize: '12px', color: 'var(--dsw-alias-label-secondary)', marginBottom: '4px' },
   cardValue: { fontSize: '18px', fontWeight: 600 },
   section: { marginBottom: '18px' },
+  details: {
+    marginBottom: '16px',
+    border: '1px solid var(--dsw-alias-border-l1)',
+    borderRadius: '10px',
+    padding: '8px 12px',
+    background: 'var(--dsw-alias-bg-layer-1)',
+  },
+  summary: { cursor: 'pointer', fontSize: '14px', fontWeight: 600, padding: '4px 0' },
   sectionTitle: { margin: '0 0 8px', fontSize: '14px', fontWeight: 600 },
   twoCols: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '14px' },
   formGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '14px', marginBottom: '12px' },
+  guardForm: {
+    border: '1px solid var(--dsw-alias-border-l1)',
+    borderRadius: '8px',
+    padding: '10px',
+    margin: '10px 0',
+    background: 'var(--dsw-alias-bg-base)',
+  },
   ruleList: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '4px 16px' },
   ruleRow: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 10px', fontSize: '12px' },
   row: { display: 'flex', alignItems: 'center', gap: '8px', margin: '5px 0', fontSize: '12px', flexWrap: 'wrap' },
@@ -672,6 +1130,37 @@ function shortId(value) {
   if (value == null) return '';
   const text = String(value);
   return text.length > 12 ? `${text.slice(0, 6)}…${text.slice(-4)}` : text;
+}
+
+function groupFailureRows(rows) {
+  const groups = new Map();
+  for (const row of rows ?? []) {
+    if (!row || typeof row.fingerprint !== 'string') continue;
+    let group = groups.get(row.fingerprint);
+    if (!group) {
+      group = { ...row, count: 0, firstSeen: row.time, lastSeen: row.time };
+      groups.set(row.fingerprint, group);
+    }
+    group.count += 1;
+    if (!group.lastSeen || Date.parse(row.time) >= Date.parse(group.lastSeen)) {
+      Object.assign(group, row);
+      group.lastSeen = row.time;
+    }
+  }
+  return [...groups.values()]
+    .sort((left, right) => Date.parse(right.lastSeen) - Date.parse(left.lastSeen))
+    .map((group) => ({
+      fingerprint: group.fingerprint,
+      count: group.count,
+      tool: group.tool,
+      category: group.category,
+      severity: group.severity,
+      code: group.code,
+      session: group.session,
+      report: group.report,
+      firstSeen: group.firstSeen,
+      lastSeen: group.lastSeen,
+    }));
 }
 
 function cellText(value) {

@@ -299,6 +299,77 @@ test('corrupt totals are reported without throwing', async (t) => {
   assert.ok(log.length > 0);
 });
 
+test('observeFailure records guard hits without changing failures', async (t) => {
+  const { root, store } = await withStore(t);
+  const seeded = await store.listGuards();
+  assert.equal(seeded.ok, true);
+  assert.ok(seeded.guards.length >= 10);
+  assert.ok(await fileExists(path.join(root, 'guards.json')));
+
+  const hit = await store.observeFailure({
+    id: 'F-test',
+    fingerprint: 'guard-fp',
+    tool: 'edit',
+    category: 'edit-target',
+    code: 'FS_NOT_OBSERVED',
+    session: 's1',
+  });
+  assert.equal(hit.ok, true, hit.error);
+  assert.equal(hit.hit, true);
+  assert.equal(hit.guardId, 'edit-read-first');
+
+  const after = await store.listGuards();
+  const guard = after.guards.find((row) => row.id === 'edit-read-first');
+  assert.equal(guard.hits, 1);
+  assert.equal(guard.lastFingerprint, 'guard-fp');
+  assert.equal((await readJsonl(path.join(root, 'guard-hits.jsonl'))).length, 1);
+  const guardHits = await store.listGuardHits({ limit: 5 });
+  assert.equal(guardHits.entries.length, 1);
+  assert.equal(guardHits.entries[0].guardId, 'edit-read-first');
+
+  const miss = await store.observeFailure({ tool: 'custom', category: 'unknown' });
+  assert.equal(miss.hit, false);
+  assert.equal((await readJsonl(path.join(root, 'guard-hits.jsonl'))).length, 1);
+  const totals = await store.getTotals();
+  assert.equal(totals.totals.failures, 0);
+});
+
+test('custom guards can be saved and deleted while built-ins only disable', async (t) => {
+  const { store } = await withStore(t);
+  const saved = await store.saveGuard({
+    id: 'custom-path-check',
+    label: 'Custom path',
+    tool: 'read',
+    hint: 'Check the path.',
+    enabled: true,
+  });
+  assert.equal(saved.ok, true, saved.error);
+  let guards = await store.listGuards();
+  assert.equal(guards.guards.find((guard) => guard.id === 'custom-path-check').hint, 'Check the path.');
+
+  const builtIn = await store.deleteGuard('path-check');
+  assert.equal(builtIn.ok, false);
+  const custom = await store.deleteGuard('custom-path-check');
+  assert.equal(custom.ok, true);
+  guards = await store.listGuards();
+  assert.equal(guards.guards.some((guard) => guard.id === 'custom-path-check'), false);
+});
+
+test('getSessionStats aggregates failures, savings, and anomalies per session', async (t) => {
+  const { store } = await withStore(t);
+  await store.recordFailure({ fingerprint: 's1-a', session: 's1', tool: 'pwsh', category: 'unknown' });
+  await store.recordFailure({ fingerprint: 's1-b', session: 's1', tool: 'read', category: 'not-found' });
+  await store.recordSavings({ session: 's1', savedTokens: 100, route: 'deepseek/deepseek-flash' });
+  await store.recordAnomaly({ session: 's2', ruleId: 'repeatFailure', count: 3, wastedTokens: 5 });
+  const stats = await store.getSessionStats();
+  assert.equal(stats.ok, true);
+  const s1 = stats.sessions.find((row) => row.sessionId === 's1');
+  const s2 = stats.sessions.find((row) => row.sessionId === 's2');
+  assert.equal(s1.failures, 2);
+  assert.equal(s1.savedTokens, 100);
+  assert.equal(s2.anomalies, 3);
+});
+
 test('missing fingerprint and closed store are refused safely', async (t) => {
   const { store } = await withStore(t);
   const invalid = await store.recordFailure({});
@@ -364,6 +435,21 @@ test('resolve deletes detail files, hides old occurrences, and keeps totals', as
   const playbook = await readJsonl(path.join(root, 'playbook.jsonl'));
   assert.equal(playbook.length, 1);
   assert.equal(playbook[0].fingerprint, 'resolve-fp');
+  assert.equal(resolved.guardId, 'learned-resolve-fp');
+  assert.equal(playbook[0].guardId, 'learned-resolve-fp');
+  assert.match(playbook[0].regression, /^regressions\/resolve-fp\.md$/);
+  assert.ok(await fileExists(path.join(root, playbook[0].regression)));
+  const guards = await store.listGuards();
+  const learned = guards.guards.find((guard) => guard.id === 'learned-resolve-fp');
+  assert.equal(learned.hint, 'read before edit');
+  assert.equal(learned.fingerprint, 'resolve-fp');
+  const hit = await store.observeFailure({
+    fingerprint: 'resolve-fp',
+    tool: 'edit',
+    category: 'unknown',
+    session: 's1',
+  });
+  assert.equal(hit.guardId, 'learned-resolve-fp');
 });
 
 test('parseFrontMatter reads the report header', () => {

@@ -31,6 +31,9 @@ test('normalizeHostConfig merges defaults, rules, and savings', () => {
   assert.equal(config.digest.maxInlineTokens, 10);
   assert.equal(config.digest.maxDetailChars, 200);
   assert.equal(config.report.maxTotalMB, 25);
+  assert.equal(config.guards.enabled, true);
+  assert.equal(config.guards.hint, true);
+  assert.equal(config.guards.tokenWaste, true);
   assert.equal(config.rules.repeatFailure.threshold, 5);
   assert.equal(config.rules.repeatFailure.windowMinutes, 10);
   assert.equal(config.rules.maxTokens.enabled, true);
@@ -74,14 +77,20 @@ test('buildSnapshot exposes totals, error sources, rules, and conservative money
   await store.recordAnomaly({ ruleId: 'repeatFailure', count: 3, wastedTokens: 600, session: 's1' });
 
   const config = normalizeHostConfig();
-  const snapshot = await buildSnapshot({ store, config, now: new Date('2026-10-22T12:00:00Z') });
+  const snapshot = await buildSnapshot({
+    store,
+    config,
+    now: new Date('2026-10-22T12:00:00Z'),
+    sessionTitles: { s1: 'Alpha', s2: 'Beta' },
+    sessionCatalog: [{ sessionId: 's1' }, { sessionId: 's2' }, { sessionId: 's3' }],
+  });
 
   assert.equal(snapshot.schema, 'dsh-failure-snapshot/1');
   assert.equal(snapshot.generatedAt, '2026-10-22T12:00:00.000Z');
   assert.equal(snapshot.totals.failures, 2);
   assert.equal(snapshot.totals.anomalies, 1);
   assert.equal(snapshot.totals.savedTokens, 800);
-  assert.equal(snapshot.sessions, 2);
+  assert.equal(snapshot.sessions, 3);
   assert.equal(snapshot.errorSources.byTool.find((row) => row.tool === 'pwsh').failures, 1);
   assert.equal(snapshot.errorSources.byCategory.find((row) => row.category === 'sandbox-denied').failures, 1);
   assert.equal(snapshot.byRoute.length, 1);
@@ -90,6 +99,32 @@ test('buildSnapshot exposes totals, error sources, rules, and conservative money
   assert.equal(snapshot.estimatedCNY, 0.0008);
   assert.equal(snapshot.failures.length, 2);
   assert.deepEqual(snapshot.unresolved, { entries: 2, fingerprints: 2 });
+  assert.equal(snapshot.unresolvedGroups.length, 2);
+  assert.equal(snapshot.unresolvedGroups.reduce((sum, group) => sum + group.count, 0), 2);
+  const alpha = snapshot.sessionStats.find((row) => row.sessionId === 's1');
+  const beta = snapshot.sessionStats.find((row) => row.sessionId === 's2');
+  assert.equal(alpha.title, 'Alpha');
+  assert.equal(alpha.failures, 1);
+  assert.equal(alpha.anomalies, 3);
+  assert.equal(beta.title, 'Beta');
+  assert.equal(beta.failures, 1);
+  const empty = snapshot.sessionStats.find((row) => row.sessionId === 's3');
+  assert.equal(empty.failures, 0);
+  assert.equal(empty.savedTokens, 0);
+  assert.equal(snapshot.guards.length, 11);
+  assert.equal(snapshot.guardsSummary.total, 11);
+  assert.equal(snapshot.guardsSummary.hits, 0);
+  assert.deepEqual(snapshot.guardCoverage, {
+    unresolvedFingerprints: 2,
+    coveredFingerprints: 0,
+    percent: 0,
+    guardsWithHits: 0,
+    guardHits: 0,
+    resolvedFingerprints: 0,
+    resolvedGuarded: 0,
+    resolvedPercent: 0,
+  });
+  assert.deepEqual(snapshot.playbook, []);
   assert.equal(snapshot.anomalies[0].ruleId, 'repeatFailure');
   assert.equal(snapshot.rules.repeatFailure.threshold, 3);
   assert.equal(snapshot.pricing.mode, 'cacheMissOffPeak');

@@ -17,6 +17,7 @@ test('missing file is not-found and allows one retry', () => {
   const result = classifyError({ message: 'Cannot find path D:\\x\\y.txt because it does not exist.' });
   assert.equal(result.category, 'not-found');
   assert.equal(result.retryable, 'once');
+  assert.equal(classifyError({ error: { info: { code: 'FS_NOT_FOUND' } } }).category, 'not-found');
 });
 
 test('stale write is retryable and carries the structured code', () => {
@@ -65,6 +66,13 @@ test('CAPTCHA stops automation', () => {
 test('shell syntax errors do not invite an unchanged retry', () => {
   const result = classifyError({ message: 'ParserError: unexpected token, missing closing brace' });
   assert.equal(result.category, 'shell-syntax');
+  assert.equal(result.retryable, false);
+});
+
+test('shell process init failures are high severity and not retryable', () => {
+  const result = classifyError({ message: '(no output)\n[exit code: 3221225794]' });
+  assert.equal(result.category, 'shell-runtime');
+  assert.equal(result.severity, 'high');
   assert.equal(result.retryable, false);
 });
 

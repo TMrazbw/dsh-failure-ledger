@@ -116,6 +116,8 @@ test('resolve deletes detail files, writes the playbook, and refreshes INBOX', a
     args: { action: 'resolve', id: first.id, fix: 'write inside the workspace', scope: 'all' },
   });
   assert.match(resolved, /^Resolved F-/);
+  assert.match(resolved, /Guard learned-fp-a/);
+  assert.match(resolved, /regression regressions\/fp-a\.md/);
 
   const report = await store.readReport('fp-a');
   assert.equal(report.text, null);
@@ -155,6 +157,38 @@ test('stats stays within 15 lines and includes session numbers', async (t) => {
   assert.ok(stats.split('\n').length <= 15);
 });
 
+test('playbook returns bounded resolved fixes', async (t) => {
+  const { store } = await withStore(t);
+  const { first } = await seed(store);
+  const resolved = await runFailureInbox({
+    store,
+    args: { action: 'resolve', id: first.id, fix: 'write inside the workspace', scope: 'all' },
+  });
+  assert.match(resolved, /^Resolved F-/);
+
+  const playbook = await runFailureInbox({ store, args: { action: 'playbook', limit: 5 } });
+  assert.match(playbook, /^Playbook — 1 recent resolved fixes/);
+  assert.match(playbook, /fp-a/);
+  assert.match(playbook, /learned-fp-a/);
+  assert.match(playbook, /write inside the workspace/);
+  assert.ok(playbook.split('\n').length <= 10);
+});
+
+test('unresolved groups open fingerprints and stays bounded', async (t) => {
+  const { store } = await withStore(t);
+  const { first } = await seed(store);
+  await runFailureInbox({
+    store,
+    args: { action: 'resolve', id: first.id, fix: 'fixed', scope: 'all' },
+  });
+
+  const text = await runFailureInbox({ store, args: { action: 'unresolved', limit: 8 } });
+  assert.match(text, /^Unresolved — 2 fingerprints, 2 entries/);
+  assert.doesNotMatch(text, /fp-a/);
+  assert.match(text, /fp-b/);
+  assert.ok(text.split('\n').length <= 10);
+});
+
 test('the failure_inbox tool has the expected schema and executes with the session', async (t) => {
   const { store } = await withStore(t);
   const { first, second } = await seed(store);
@@ -164,7 +198,7 @@ test('the failure_inbox tool has the expected schema and executes with the sessi
   });
 
   assert.equal(tool.name, 'failure_inbox');
-  assert.deepEqual(tool.parameters.properties.action.enum, ['list', 'show', 'resolve', 'stats']);
+  assert.deepEqual(tool.parameters.properties.action.enum, ['list', 'unresolved', 'show', 'resolve', 'stats', 'playbook']);
   assert.equal(tool.parameters.required[0], 'action');
   assert.equal(tool.output.schema.type, 'string');
   assert.equal(typeof tool.execute, 'function');
