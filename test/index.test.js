@@ -95,11 +95,13 @@ test('apply registers the listener, projection, and failure_inbox tool', async (
 
   apply(ctx, { reportRoot: root, digest: { maxInlineTokens: 10 } });
 
-  assert.equal(handlers.length, 2);
+  assert.equal(handlers.length, 3);
   assert.equal(handlers[0].name, 'tools/post-execute');
   assert.equal(typeof handlers[0].listener, 'function');
   assert.equal(handlers[1].name, 'agent/pre-step');
   assert.equal(typeof handlers[1].listener, 'function');
+  assert.equal(handlers[2].name, 'agent/pre-step');
+  assert.equal(typeof handlers[2].listener, 'function');
   assert.equal(cleanups.length, 1);
   assert.equal(projections.length, 1);
   assert.equal(projections[0].key, 'failureLedger');

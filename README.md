@@ -10,6 +10,7 @@ DSH Harness 的 profile 级 Host + Client 插件：
 - 已解决失败自动生成 learned Guard 和回归草案
 - 重复成功工具调用给出下一步提示，减少无意义重复
 - 按会话显示累计失败、异常、节省 tokens
+- V2.5：未解决失败自动进入下一步；失败后修正成功自动自愈
 
 ## 安装
 
@@ -28,7 +29,36 @@ dsh plugin --profile <profile> add https://github.com/TMrazbw/dsh-failure-ledger
 
 插件不需要额外 npm 运行时依赖；`vendor/` 内含 MIT 许可的 schemastery 依赖。
 
-## V2 行为
+## V2.5 行为
+
+### A. 未解决失败自动进入下一步
+
+Guard 未命中的失败落盘后，下一步自动注入：
+
+```text
+[未解决失败] tool/category/code: hint
+```
+
+不需要用户先提醒模型。仍然不阻断工具调用。
+
+### B. 成功重试自动自愈
+
+同一 turn、同一工具，失败后用不同参数成功：
+
+- 自动 resolve 该失败
+- 自动生成 learned Guard
+- 自动生成 regression 草案
+- playbook 记录 `自动自愈：<失败提示>`
+- 清理待注入提示
+
+只使用内存中的参数签名，不保存原始参数。默认：
+
+```text
+selfHeal.enabled = true
+selfHeal.windowSeconds = 180
+```
+
+如果自动自愈误判，可以在 profile 配置中关闭。
 
 ### Guard（A 模式）
 
@@ -52,6 +82,7 @@ dsh plugin --profile <profile> add https://github.com/TMrazbw/dsh-failure-ledger
 - 同一会话内相同 `tool + arguments` 在 120 秒内重复成功调用
 - 下一步提示复用上次结果或改参数
 - 不阻断、不增加模型请求
+- `guards.tokenWaste` 默认 true
 
 ### 面板
 
@@ -92,7 +123,7 @@ INBOX.md / _plugin.log
 node --test --test-isolation=none
 ```
 
-当前 151 项测试全部通过。
+当前 155 项测试全部通过。
 
 ## 许可证
 

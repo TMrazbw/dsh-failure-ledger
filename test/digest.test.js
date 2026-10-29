@@ -206,6 +206,21 @@ test('tool-result callback observes both successes and failures', async () => {
   ]);
 });
 
+test('unresolved and persisted callbacks receive the failure', async () => {
+  const unresolved = [];
+  const persisted = [];
+  const handler = createDigestHandler({
+    store: fakeStore(),
+    onUnresolved: (entry) => unresolved.push(entry),
+    onFailurePersisted: (entry, exec) => persisted.push({ fingerprint: entry.fingerprint, tool: exec.name }),
+  });
+  await handler.listener(makeExec(), failureResult(), accept);
+  assert.equal(unresolved.length, 1);
+  assert.equal(unresolved[0].category, 'sandbox-denied');
+  assert.equal(persisted.length, 1);
+  assert.equal(persisted[0].tool, 'pwsh');
+});
+
 test('successful results and synthetic aborted results are ignored', async () => {
   const store = fakeStore();
   const handler = createDigestHandler({ store });

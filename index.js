@@ -30,6 +30,7 @@ import { PROJECTION_KEY, createFailureLedgerProjection } from './lib/projection.
 import { createSnapshotRoute, buildSnapshot } from './lib/snapshot.js';
 import { createStore } from './lib/store.js';
 import { createTokenWasteGuard } from './lib/token-waste.js';
+import { createSelfHealTracker } from './lib/self-heal.js';
 
 export { Config, DEFAULT_REPORT_ROOT };
 
@@ -78,6 +79,10 @@ export function apply(ctx, config = {}) {
   const settings = resolveSettings(config);
   const hintQueue = createHintQueue();
   const tokenWaste = createTokenWasteGuard({ queue: hintQueue });
+  const turnBySession = new Map();
+  const selfHeal = createSelfHealTracker({
+    windowMs: settings.selfHeal.windowSeconds * 1000,
+  });
   let handler = null;
   migrateReportRoot(settings.reportRoot, LEGACY_REPORT_ROOT);
   const store = createStore({
@@ -269,16 +274,58 @@ export function apply(ctx, config = {}) {
         hintQueue.push(session, guard);
       }
     },
-    onToolResult: (exec, result, decision) => {
-      if (settings.guards.tokenWaste === false) return;
+    onUnresolved: (entry) => {
+      if (settings.guards.hint === false || settings.guards.autoHint === false || !entry?.session) return;
+      const code = entry.code ? `/${entry.code}` : '';
+      hintQueue.push(entry.session, {
+        id: 'unresolved-failure',
+        label: '未解决失败',
+        action: 'hint',
+        hint: `[未解决失败] ${entry.tool}/${entry.category}${code}: ${entry.hint || 'Inspect the failure and correct the call.'}`,
+      });
+    },
+    onFailurePersisted: (entry, exec) => {
+      if (settings.selfHeal.enabled === false) return;
       const sessionId = exec?.agent?.id ?? exec?.agent?.session?.id ?? null;
-      tokenWaste.observe({
+      if (!sessionId) return;
+      selfHeal.noteFailure({
         sessionId,
         tool: exec?.name,
+        turn: turnBySession.get(String(sessionId)),
+        fingerprint: entry.fingerprint,
+        failureId: entry.id,
+        hint: entry.hint,
         args: exec?.arguments,
-        isError: result?.isError === true,
-        decision,
       });
+    },
+    onToolResult: (exec, result, decision) => {
+      const sessionId = exec?.agent?.id ?? exec?.agent?.session?.id ?? null;
+      if (settings.guards.tokenWaste !== false) {
+        tokenWaste.observe({
+          sessionId,
+          tool: exec?.name,
+          args: exec?.arguments,
+          isError: result?.isError === true,
+          decision,
+        });
+      }
+      if (settings.selfHeal.enabled === false || result?.isError === true) return;
+      const heal = selfHeal.noteSuccess({
+        sessionId,
+        tool: exec?.name,
+        turn: turnBySession.get(String(sessionId)),
+        args: exec?.arguments,
+      });
+      if (!heal) return;
+      hintQueue.clear(sessionId);
+      const id = heal.failure.failureId ?? heal.failure.fingerprint;
+      if (!id) return;
+      const fix = `自动自愈：${heal.failure.hint || '失败后同工具修正调用成功。'}`;
+      void store.resolveFailure({ id, fix, scope: 'all', learn: true })
+        .then((resolved) => {
+          if (resolved?.ok) void refreshInbox(store);
+        })
+        .catch(() => {});
     },
     onPersisted: () => refreshInbox(store),
     onError: (error) => {
@@ -295,9 +342,22 @@ export function apply(ctx, config = {}) {
     enabled: settings.guards.hint !== false,
   });
 
+  const turnListener = async (payload, next) => {
+    const sessionId = payload?.agent?.id ?? payload?.agent?.session?.id ?? null;
+    if (sessionId != null) {
+      turnBySession.set(String(sessionId), payload?.turn ?? null);
+      if (turnBySession.size > 500) {
+        const oldest = turnBySession.keys().next().value;
+        if (oldest !== undefined) turnBySession.delete(oldest);
+      }
+    }
+    return next();
+  };
+
   ctx.effect(() => {
     const disposeTool = ctx.on('tools/post-execute', handler.listener);
     const disposeHint = ctx.on('agent/pre-step', guardHintListener);
+    const disposeTurn = ctx.on('agent/pre-step', turnListener);
     return () => {
       try {
         disposeTool();
@@ -306,6 +366,11 @@ export function apply(ctx, config = {}) {
       }
       try {
         disposeHint();
+      } catch {
+        // Ignore double disposal.
+      }
+      try {
+        disposeTurn();
       } catch {
         // Ignore double disposal.
       }

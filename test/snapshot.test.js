@@ -34,6 +34,8 @@ test('normalizeHostConfig merges defaults, rules, and savings', () => {
   assert.equal(config.guards.enabled, true);
   assert.equal(config.guards.hint, true);
   assert.equal(config.guards.tokenWaste, true);
+  assert.equal(config.guards.autoHint, true);
+  assert.equal(config.selfHeal.enabled, true);
   assert.equal(config.rules.repeatFailure.threshold, 5);
   assert.equal(config.rules.repeatFailure.windowMinutes, 10);
   assert.equal(config.rules.maxTokens.enabled, true);
