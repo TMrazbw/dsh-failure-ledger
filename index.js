@@ -166,6 +166,35 @@ export function apply(ctx, config = {}) {
       }
     };
 
+    const readSessionViews = async (sessionIds) => {
+      const views = {};
+      if (typeof connectionCtx.sessionQuery?.observeSession !== 'function') return views;
+      for (const sessionId of sessionIds.slice(0, 20)) {
+        let observation = null;
+        try {
+          observation = await connectionCtx.sessionQuery.observeSession(sessionId, { projectionMode: 'all' });
+          const view = observation?.projections?.values?.[PROJECTION_KEY];
+          if (view) {
+            views[String(sessionId)] = {
+              context: view.context ?? null,
+              usage: view.usage ?? null,
+              usageDaily: view.usageDaily ?? null,
+              route: view.route ?? null,
+            };
+          }
+        } catch {
+          // A missing/persisted-only session simply has no live context yet.
+        } finally {
+          try {
+            observation?.dispose?.();
+          } catch {
+            // Ignore observation disposal failures.
+          }
+        }
+      }
+      return views;
+    };
+
     const readArchivedSessionIds = async () => {
       const controller = new AbortController();
       try {
@@ -230,11 +259,13 @@ export function apply(ctx, config = {}) {
             return typeof title === 'string' && title.trim() !== '';
           });
           const visibleCatalog = Object.keys(titles).length > 0 ? titled : catalog;
+          const views = await readSessionViews(visibleCatalog.map((row) => String(row.sessionId)));
           return buildSnapshot({
             store,
             config: resolveSettings(await readConfig()),
             sessionTitles: titles,
             sessionCatalog: visibleCatalog,
+            views,
           });
         },
       }));

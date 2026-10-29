@@ -91,6 +91,36 @@ test('3 failures, 1 retry, and 1 cache miss produce the expected view', () => {
   assert.equal(view.sessionId, 's1');
 });
 
+test('usage is also bucketed by local day', () => {
+  const state = fold({ id: 's1' }, [
+    ev('assistant/message', { usage: { inputTokens: 1_234, outputTokens: 56, cacheReadTokens: 7 } }, 1),
+  ]);
+  const view = createAnomalyView(state);
+  const days = Object.values(view.usageDaily);
+  assert.equal(days.length, 1);
+  assert.equal(days[0].inputTokens, 1_234);
+  assert.equal(days[0].outputTokens, 56);
+  assert.equal(days[0].requests, 1);
+});
+
+test('context attribution is folded into the projection and contextJump rule', () => {
+  const state = fold({ id: 's1', createdAt: T }, [
+    ev('turn/start', { turn: 1 }, 1),
+    ev('request/context', { contextWindow: 100_000 }, 2),
+    ev('assistant/message', { usage: { inputTokens: 50_000, outputTokens: 100, cacheReadTokens: 1_000 } }, 3),
+    ev('tool/call', { callId: 'c1', name: 'read' }, 4),
+    ev('tool/result', { message: { toolCallId: 'c1', isError: false } }, 5),
+    ev('assistant/message', { usage: { inputTokens: 65_000, outputTokens: 200, cacheReadTokens: 1_000 } }, 6),
+  ]);
+  const view = createAnomalyView(state);
+  assert.equal(view.context.window, 100_000);
+  assert.equal(view.context.series.length, 2);
+  assert.equal(view.context.series.at(-1).source, 'tool');
+  assert.equal(view.context.series.at(-1).tool, 'read');
+  assert.equal(view.byRule.contextJump, 1);
+  assert.equal(view.n2 >= 1, true);
+});
+
 test('the projection state is pure and replays identically', () => {
   const header = { id: 's1', createdAt: T };
   const first = fold(header, threeFailures());

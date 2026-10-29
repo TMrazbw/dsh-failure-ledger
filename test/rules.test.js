@@ -17,6 +17,8 @@ test('defaults enable every rule with conservative thresholds', () => {
   for (const id of RULE_IDS) assert.equal(rules[id].enabled, true);
   assert.equal(rules.repeatFailure.threshold, 3);
   assert.equal(rules.contextPressure.ratio, 0.8);
+  assert.equal(rules.contextJump.minDeltaTokens, 8000);
+  assert.equal(rules.contextJump.minWindowRatio, 0.1);
   assert.equal(rules.idleLoop.minStepsWithoutProgress, 4);
   assert.equal(DEFAULT_RULES.repeatFailure.windowMinutes, 10);
 });
@@ -101,6 +103,38 @@ test('contextPressure fires at the configured ratio', () => {
 
   const quiet = evaluateRules({ pressure: { projectedTokens: 7_999, contextWindow: 10_000 } }, {});
   assert.equal(quiet.byRule.contextPressure, undefined);
+});
+
+test('contextJump fires only for large attributed growth', () => {
+  const series = [
+    { at: 1, turn: 1, step: 1, source: 'tool', tool: 'read', callId: 'c1', delta: 12_000, window: 100_000 },
+    { at: 2, turn: 1, step: 2, source: 'user', tool: null, callId: null, delta: 7_999, window: 100_000 },
+    { at: 3, turn: 1, step: 3, source: 'tool', tool: 'grep', callId: 'c2', delta: 8_000, window: 100_000 },
+  ];
+  const hit = evaluateRules({ context: { series } }, {});
+  assert.equal(hit.byRule.contextJump.length, 1);
+  assert.equal(hit.byRule.contextJump[0].evidence.delta, 12_000);
+  assert.equal(hit.byRule.contextJump[0].evidence.source, 'tool');
+
+  const wide = evaluateRules({ context: { series: [{ ...series[0], delta: 8_000, window: 100_000 }] } }, {});
+  assert.equal(wide.byRule.contextJump, undefined);
+});
+
+test('contextJump is bounded per session and ignores compaction', () => {
+  const series = [1, 2, 3, 4].map((turn) => ({
+    at: turn,
+    turn,
+    step: 1,
+    source: 'tool',
+    tool: 'read',
+    callId: `c${turn}`,
+    delta: 10_000,
+    window: 50_000,
+  }));
+  series.push({ at: 9, turn: 9, step: 9, source: 'compaction', delta: -20_000, window: 50_000, compaction: true });
+  const hit = evaluateRules({ context: { series } }, { contextJump: { maxHitsPerSession: 3 } });
+  assert.equal(hit.byRule.contextJump.length, 3);
+  assert.equal(hit.hits.some((entry) => entry.evidence.source === 'compaction'), false);
 });
 
 test('maxTokens and abortedTurn read turn/end reasons', () => {

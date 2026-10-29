@@ -41,6 +41,11 @@ window.__ModuleLoader__.load({
       ['contextPressure', '上下文压力', 'Context pressure', [
         ['ratio', '压力比例', 'Pressure ratio'],
       ]],
+      ['contextJump', '上下文跳变', 'Context jump', [
+        ['minDeltaTokens', '最小增量 tokens', 'Min delta tokens'],
+        ['minWindowRatio', '最小窗口占比', 'Min window ratio'],
+        ['maxHitsPerSession', '每会话最多', 'Max hits per session'],
+      ]],
       ['maxTokens', 'max-tokens 截断', 'max-tokens truncation', []],
       ['abortedTurn', '中止回合', 'Aborted turn', []],
       ['subagentFailure', '子代理失败', 'Subagent failure', []],
@@ -56,6 +61,10 @@ window.__ModuleLoader__.load({
       ['digest', 'maxDetailChars'],
       ['savings', 'priceMode'],
       ['savings', 'customUnitPricePerMTokens'],
+      ['budget', 'enabled'],
+      ['budget', 'sessionCNY'],
+      ['budget', 'dailyCNY'],
+      ['budget', 'warnRatio'],
       ...RULE_ROWS.flatMap(([ruleId, , , fields]) => [
         ['rules', ruleId, 'enabled'],
         ...fields.map(([field]) => ['rules', ruleId, field]),
@@ -226,7 +235,7 @@ window.__ModuleLoader__.load({
       return null;
     }
 
-    function Panel() {
+    function Panel(props) {
       const [snapshot, setSnapshot] = useState(null);
       const [error, setError] = useState(null);
       const [loading, setLoading] = useState(true);
@@ -240,6 +249,14 @@ window.__ModuleLoader__.load({
       const [guardDraft, setGuardDraft] = useState(null);
       const [guardSaving, setGuardSaving] = useState(false);
       const [guardError, setGuardError] = useState(null);
+      let liveProjection = null;
+      try {
+        if (typeof props?.useProjection === 'function') {
+          liveProjection = unwrapProjection(props.useProjection('failureLedger'));
+        }
+      } catch {
+        liveProjection = null;
+      }
 
       async function load() {
         setLoading(true);
@@ -284,6 +301,7 @@ window.__ModuleLoader__.load({
             digest: deepClone(snapshot.config?.digest ?? {}),
             report: deepClone(snapshot.config?.report ?? {}),
             savings: deepClone(snapshot.config?.savings ?? {}),
+            budget: deepClone(snapshot.config?.budget ?? {}),
             rules: deepClone(snapshot.rules ?? {}),
           });
         }
@@ -292,12 +310,18 @@ window.__ModuleLoader__.load({
       const totals = snapshot?.totals ?? {};
       const sessionStats = snapshot?.sessionStats ?? [];
       const selectedStats = sessionStats.find((row) => row.sessionId === selectedStatsSession)
+        ?? sessionStats.find((row) => row.context != null)
         ?? sessionStats[0]
+        ?? null;
+      const context = selectedStats?.context
+        ?? liveProjection?.context
+        ?? snapshot?.context
         ?? null;
       const writable = snapshot != null;
       const rules = mergeRules(snapshot?.rules, draft?.rules);
       const digest = { ...(snapshot?.config?.digest ?? {}), ...(draft?.digest ?? {}) };
       const savings = { ...(snapshot?.config?.savings ?? {}), ...(draft?.savings ?? {}) };
+      const budget = { ...(snapshot?.config?.budget ?? {}), ...(draft?.budget ?? {}) };
       const minSeverity = draft?.minSeverity ?? snapshot?.config?.minSeverity ?? 'medium';
       const allFailures = snapshot?.failures ?? [];
       const sessionIds = [...new Set(allFailures.map((row) => row.session).filter(Boolean))];
@@ -480,11 +504,22 @@ window.__ModuleLoader__.load({
           h('div', { style: styles.grid },
             card(translate('累计节省', 'Saved tokens'), formatTokens(totals.savedTokens ?? 0)),
             card(translate('预计节省', 'Estimated saved'), formatCNY(snapshot.estimatedCNY ?? 0)),
+            card(translate('累计花费', 'Spend'), formatCNY(snapshot.totalCostCNY ?? 0)),
+            card(translate('今日花费', 'Today spend'), formatCNY(snapshot.todayCostCNY ?? 0)),
             card(translate('执行失败', 'Failures'), String(totals.failures ?? 0)),
             card(translate('未解决', 'Open'), String(snapshot.unresolved?.fingerprints ?? 0)),
             card(translate('异常项', 'Anomalies'), String(totals.anomalies ?? 0)),
             card(translate('压缩次数', 'Compressions'), String(totals.compressions ?? 0)),
             card(translate('覆盖会话', 'Sessions'), String(snapshot.sessions ?? 0))),
+          snapshot.budget?.enabled && snapshot.budget?.status !== 'ok'
+            ? h('p', {
+              style: snapshot.budget.status === 'exceeded' ? styles.error : styles.muted,
+              role: 'status',
+            }, snapshot.budget.status === 'exceeded'
+              ? translate('预算已超限。', 'Budget exceeded.')
+              : translate('预算接近上限。', 'Budget approaching the limit.'))
+            : null,
+          context == null ? null : renderContextSection(context, selectedStats?.cost?.cny ?? null),
           section(translate('对话累计（整体）', 'Conversation totals'),
             sessionStats.length === 0
               ? h('p', { style: styles.muted }, translate('暂无会话累计数据', 'No conversation totals yet'))
@@ -830,6 +865,17 @@ window.__ModuleLoader__.load({
                   `报表根目录（需重启）：${snapshot.config?.reportRoot ?? '-'}`,
                   `Report root (restart to change): ${snapshot.config?.reportRoot ?? '-'}`,
                 )),
+              ),
+              h('div', { style: styles.card },
+                h('h3', { style: styles.sectionTitle }, translate('预算提示', 'Budget warning')),
+                checkbox(translate('启用预算提示', 'Enable budget warning'), budget.enabled, (value) => update(['budget', 'enabled'], value), !writable),
+                numberField(translate('本会话预算 元', 'Session budget CNY'), budget.sessionCNY, (value) => update(['budget', 'sessionCNY'], value), !writable),
+                numberField(translate('今日预算 元', 'Daily budget CNY'), budget.dailyCNY, (value) => update(['budget', 'dailyCNY'], value), !writable),
+                numberField(translate('预警比例 0–1', 'Warn ratio 0–1'), budget.warnRatio, (value) => update(['budget', 'warnRatio'], value), !writable),
+                h('p', { style: styles.muted }, translate(
+                  '只做估算与提示，不查余额、不阻断。',
+                  'Estimate and warning only; no balance lookup, no blocking.',
+                )),
               )),
             h('div', { style: styles.ruleList },
               RULE_ROWS.map(([ruleId, zhLabel, enLabel, fields]) => {
@@ -872,6 +918,91 @@ window.__ModuleLoader__.load({
     function isElement(value) {
       return value != null && typeof value === 'object'
         && (value.$$typeof != null || typeof value.type === 'string' || typeof value.type === 'function');
+    }
+
+    function renderContextSection(context, costCNY) {
+      const series = Array.isArray(context?.series) ? context.series : [];
+      const window = toCount(context?.window);
+      const lastInput = toCount(context?.lastInputTokens);
+      const lastOutput = toCount(context?.lastOutputTokens);
+      const used = lastInput + lastOutput;
+      const ratio = window > 0 ? Math.round((used / window) * 1000) / 10 : null;
+      const topSources = contextTopSources(series);
+      const turnDelta = contextTurnDelta(series);
+      const recent = series.slice(-5).reverse();
+      return section(translate('上下文归因（所选对话）', 'Context attribution (selected conversation)'),
+        h('div', { style: styles.grid },
+          card(translate('当前上下文', 'Current context'),
+            window > 0 ? `${formatTokens(used)} / ${formatTokens(window)}` : `${formatTokens(used)} · ${translate('窗口未知', 'window unknown')}`),
+          card(translate('窗口占比', 'Window ratio'), ratio == null ? translate('未知', 'unknown') : `${ratio}%`),
+          card(translate('本回合增量', 'This turn growth'), `+${formatTokens(turnDelta)}`),
+          card(translate('本会话花费', 'Session spend'), costCNY == null ? '—' : formatCNY(costCNY)),
+          card(translate('压缩 / 重置', 'Compactions'), String(toCount(context?.compactionCount)))),
+        h('p', { style: styles.muted }, translate(
+          `主要来源：${topSources.length === 0 ? '—' : topSources.map(([source, tokens]) => `${contextSourceLabel(source)} ${formatTokens(tokens)}`).join(' · ')}`,
+          `Top sources: ${topSources.length === 0 ? '—' : topSources.map(([source, tokens]) => `${contextSourceLabel(source)} ${formatTokens(tokens)}`).join(' · ')}`,
+        )),
+        table(
+          [
+            translate('时间', 'Time'),
+            translate('增量', 'Delta'),
+            translate('来源', 'Source'),
+            translate('工具 / 调用', 'Tool / call'),
+            translate('窗口占比', 'Window ratio'),
+          ],
+          recent.map((entry) => {
+            const delta = Number(entry?.delta);
+            const entryWindow = toCount(entry?.window);
+            return [
+              entry?.at == null ? '—' : formatTime(entry.at),
+              Number.isFinite(delta) && delta > 0 ? `+${formatTokens(delta)}` : '—',
+              contextSourceLabel(entry?.source),
+              entry?.tool || entry?.callId || '—',
+              Number.isFinite(delta) && delta > 0 && entryWindow > 0
+                ? `${Math.round((delta / entryWindow) * 1000) / 10}%`
+                : '—',
+            ];
+          }),
+          translate('暂无上下文增长记录', 'No context growth recorded yet'),
+        ),
+        h('p', { style: styles.muted }, translate(
+          `最近 ${Math.min(series.length, 5)} 次请求；归因基于最近一次 tool/user/system 事件，近似 ±10%，不是精确构成。`,
+          `Latest ${Math.min(series.length, 5)} requests; attribution uses the nearest tool/user/system event, approximate ±10%, not an exact breakdown.`,
+        )));
+    }
+
+    function contextTopSources(series) {
+      const totals = new Map();
+      for (const entry of Array.isArray(series) ? series : []) {
+        const delta = Number(entry?.delta);
+        if (!Number.isFinite(delta) || delta <= 0 || entry?.compaction === true) continue;
+        const source = entry?.source ?? 'unknown';
+        totals.set(source, (totals.get(source) ?? 0) + delta);
+      }
+      return [...totals.entries()].sort((left, right) => right[1] - left[1]).slice(0, 3);
+    }
+
+    function contextTurnDelta(series) {
+      const rows = Array.isArray(series) ? series : [];
+      const latestTurn = rows.at(-1)?.turn;
+      if (latestTurn == null) return 0;
+      return rows
+        .filter((entry) => entry?.turn === latestTurn)
+        .reduce((sum, entry) => {
+          const delta = Number(entry?.delta);
+          return Number.isFinite(delta) && delta > 0 ? sum + delta : sum;
+        }, 0);
+    }
+
+    function contextSourceLabel(source) {
+      switch (source) {
+        case 'tool': return translate('工具', 'tool');
+        case 'user': return translate('用户', 'user');
+        case 'system-cache': return translate('系统/缓存', 'system/cache');
+        case 'compaction': return translate('压缩', 'compaction');
+        case 'baseline': return translate('基线', 'baseline');
+        default: return translate('未知', 'unknown');
+      }
     }
 
     function checkbox(label, value, onChange, disabled) {
@@ -1117,7 +1248,7 @@ function formatTokens(value) {
 
 function formatCNY(value) {
   const number = Number(value);
-  return `¥${Number.isFinite(number) ? number.toFixed(4) : '0.0000'}`;
+  return `¥${Number.isFinite(number) ? number.toFixed(2) : '0.00'}`;
 }
 
 function formatTime(value) {

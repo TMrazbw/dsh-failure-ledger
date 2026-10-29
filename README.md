@@ -5,12 +5,15 @@ DSH Harness 的 profile 级 Host + Client 插件：
 - 采集所有会话、代理、子代理的工具失败
 - 压缩大型错误并统计节省 tokens
 - 维护失败台账、去重、playbook 和面板
-- 回合尾只显示**本回合**失败/节省
-- V2 Guard：失败后观察命中，下一步给一行提示，不阻断
+- 回合尾只显示本回合失败/节省
+- Guard 观察命中，下一步给一行提示，不阻断
 - 已解决失败自动生成 learned Guard 和回归草案
-- 重复成功工具调用给出下一步提示，减少无意义重复
+- 重复成功工具调用给出下一步提示
+- 未解决失败自动进入下一步
+- 失败后修正成功自动自愈
+- 上下文归因：看清哪一步让上下文增长
+- 花费 / 今日花费 / 可选预算提示
 - 按会话显示累计失败、异常、节省 tokens
-- V2.5：未解决失败自动进入下一步；失败后修正成功自动自愈
 
 ## 安装
 
@@ -29,36 +32,7 @@ dsh plugin --profile <profile> add https://github.com/TMrazbw/dsh-failure-ledger
 
 插件不需要额外 npm 运行时依赖；`vendor/` 内含 MIT 许可的 schemastery 依赖。
 
-## V2.5 行为
-
-### A. 未解决失败自动进入下一步
-
-Guard 未命中的失败落盘后，下一步自动注入：
-
-```text
-[未解决失败] tool/category/code: hint
-```
-
-不需要用户先提醒模型。仍然不阻断工具调用。
-
-### B. 成功重试自动自愈
-
-同一 turn、同一工具，失败后用不同参数成功：
-
-- 自动 resolve 该失败
-- 自动生成 learned Guard
-- 自动生成 regression 草案
-- playbook 记录 `自动自愈：<失败提示>`
-- 清理待注入提示
-
-只使用内存中的参数签名，不保存原始参数。默认：
-
-```text
-selfHeal.enabled = true
-selfHeal.windowSeconds = 180
-```
-
-如果自动自愈误判，可以在 profile 配置中关闭。
+## 行为
 
 ### Guard（A 模式）
 
@@ -77,6 +51,17 @@ selfHeal.windowSeconds = 180
 - 写 `regressions/<fingerprint>.md` 回归草案
 - 后续同指纹失败命中 learned Guard（observe + hint）
 
+### V2.5 自动闭环
+
+- Guard 未命中的失败自动进入下一步：
+  `[未解决失败] tool/category/code: hint`
+- 同 turn、同 tool，失败后不同参数的成功调用视为自愈：
+  - 自动 resolve
+  - 自动生成 learned Guard/regression
+  - playbook 记录“自动自愈”
+  - 默认 `selfHeal.enabled=true`，窗口 180 秒
+- 如果自动自愈误判，可关闭 `selfHeal.enabled`
+
 ### Token 浪费守卫
 
 - 同一会话内相同 `tool + arguments` 在 120 秒内重复成功调用
@@ -84,10 +69,33 @@ selfHeal.windowSeconds = 180
 - 不阻断、不增加模型请求
 - `guards.tokenWaste` 默认 true
 
+### 上下文归因
+
+- 面板“上下文归因（所选对话）”
+- 当前 tokens / window、本回合增量、压缩次数
+- 主要来源 Top3（tool/user/system-cache）
+- 最近 5 次请求
+- 新规则 `contextJump`：
+  - 默认 8000 tokens 且窗口 10%
+  - 每会话最多 3 条
+  - 近似 ±10%，不压缩、不阻断
+
+### 花费 / 预算
+
+- 按 usage 与官方价格估算
+- 面板显示累计花费、今日花费、本会话花费
+- 可选预算：
+  - `budget.enabled` 默认 false
+  - `sessionCNY` / `dailyCNY` / `warnRatio`
+  - 超限/接近上限只提示，不阻断
+- 未知模型回退 flash；不查余额/套餐
+- 金额显示到分（2 位小数）
+
 ### 面板
 
 - 顶部统计
-- 对话累计下拉（与侧栏会话标题同源）
+- 上下文归因
+- 对话累计下拉
 - 待解决失败（按指纹）
 - 最近失败（含已解决状态）
 - 规则与参数（前置、可编辑）
@@ -123,7 +131,7 @@ INBOX.md / _plugin.log
 node --test --test-isolation=none
 ```
 
-当前 155 项测试全部通过。
+当前 175 项测试全部通过。
 
 ## 许可证
 

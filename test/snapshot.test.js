@@ -36,6 +36,8 @@ test('normalizeHostConfig merges defaults, rules, and savings', () => {
   assert.equal(config.guards.tokenWaste, true);
   assert.equal(config.guards.autoHint, true);
   assert.equal(config.selfHeal.enabled, true);
+  assert.equal(config.budget.enabled, false);
+  assert.equal(config.budget.warnRatio, 0.8);
   assert.equal(config.rules.repeatFailure.threshold, 5);
   assert.equal(config.rules.repeatFailure.windowMinutes, 10);
   assert.equal(config.rules.maxTokens.enabled, true);
@@ -79,12 +81,15 @@ test('buildSnapshot exposes totals, error sources, rules, and conservative money
   await store.recordAnomaly({ ruleId: 'repeatFailure', count: 3, wastedTokens: 600, session: 's1' });
 
   const config = normalizeHostConfig();
+  config.budget = { enabled: true, sessionCNY: 0.5, dailyCNY: 0, warnRatio: 0.8 };
   const snapshot = await buildSnapshot({
     store,
     config,
     now: new Date('2026-10-22T12:00:00Z'),
     sessionTitles: { s1: 'Alpha', s2: 'Beta' },
     sessionCatalog: [{ sessionId: 's1' }, { sessionId: 's2' }, { sessionId: 's3' }],
+    contexts: { s1: { window: 100_000, lastInputTokens: 12_000, series: [] } },
+    views: { s2: { usage: { inputTokens: 1_000_000, outputTokens: 0 }, route: { provider: 'deepseek', model: 'deepseek-flash' } } },
   });
 
   assert.equal(snapshot.schema, 'dsh-failure-snapshot/1');
@@ -97,8 +102,8 @@ test('buildSnapshot exposes totals, error sources, rules, and conservative money
   assert.equal(snapshot.errorSources.byCategory.find((row) => row.category === 'sandbox-denied').failures, 1);
   assert.equal(snapshot.byRoute.length, 1);
   assert.equal(snapshot.byRoute[0].savedTokens, 800);
-  assert.equal(snapshot.byRoute[0].cny, 0.0008);
-  assert.equal(snapshot.estimatedCNY, 0.0008);
+  assert.equal(snapshot.byRoute[0].cny, 0);
+  assert.equal(snapshot.estimatedCNY, 0);
   assert.equal(snapshot.failures.length, 2);
   assert.deepEqual(snapshot.unresolved, { entries: 2, fingerprints: 2 });
   assert.equal(snapshot.unresolvedGroups.length, 2);
@@ -106,6 +111,12 @@ test('buildSnapshot exposes totals, error sources, rules, and conservative money
   const alpha = snapshot.sessionStats.find((row) => row.sessionId === 's1');
   const beta = snapshot.sessionStats.find((row) => row.sessionId === 's2');
   assert.equal(alpha.title, 'Alpha');
+  assert.equal(alpha.context.window, 100_000);
+  assert.equal(beta.cost.cny, 1);
+  assert.equal(beta.budget.status, 'exceeded');
+  assert.equal(snapshot.totalCostCNY, 1);
+  assert.equal(snapshot.budget.enabled, true);
+  assert.equal(snapshot.budget.status, 'exceeded');
   assert.equal(alpha.failures, 1);
   assert.equal(alpha.anomalies, 3);
   assert.equal(beta.title, 'Beta');

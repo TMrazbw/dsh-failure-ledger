@@ -255,6 +255,15 @@ test('the panel bridge opens on a new panel request only', async () => {
   assert.deepEqual(panels, ['failure-ledger']);
 });
 
+test('the panel includes context attribution and its rule controls', async () => {
+  const { source } = await loadClient();
+  assert.match(source, /上下文归因/);
+  assert.match(source, /contextJump/);
+  assert.match(source, /minDeltaTokens/);
+  assert.match(source, /contextTopSources/);
+  assert.match(source, /toFixed\(2\)/);
+});
+
 test('the client half contains no timers or polling', async () => {
   const { source } = await loadClient();
   assert.doesNotMatch(source, /setInterval|setTimeout|requestAnimationFrame/);
