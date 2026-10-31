@@ -36,11 +36,13 @@ dsh plugin --profile <profile> add https://github.com/TMrazbw/dsh-failure-ledger
 
 ### Guard（A 模式）
 
-- 默认 Guard 覆盖 edit/read 路径、搜索、命令、超时、sandbox、stale write、
-  PWSh 启动失败、人工验证、浏览器下载/授权
+- 默认 13 条 Guard：edit/read 路径、搜索、命令、超时、sandbox、stale write、
+  PWSh 启动失败、未知工具、缺失依赖、人工验证、浏览器下载/授权
 - 失败后只记录观察命中；下一步注入一行提示
 - **不阻断工具调用**，不增加模型请求
 - 面板可查看/新建/禁用 Guard；内置 Guard 只能禁用
+- Guard 面板只显示已出现（hits > 0）的规则，最多 20 条；
+  超出 20 条和未出现的规则收起
 
 ### 已解决不复发
 
@@ -51,7 +53,7 @@ dsh plugin --profile <profile> add https://github.com/TMrazbw/dsh-failure-ledger
 - 写 `regressions/<fingerprint>.md` 回归草案
 - 后续同指纹失败命中 learned Guard（observe + hint）
 
-### V2.5 自动闭环
+### 自动闭环
 
 - Guard 未命中的失败自动进入下一步：
   `[未解决失败] tool/category/code: hint`
@@ -73,8 +75,7 @@ dsh plugin --profile <profile> add https://github.com/TMrazbw/dsh-failure-ledger
 
 - 面板“上下文归因（所选对话）”
 - 当前 tokens / window、本回合增量、压缩次数
-- 主要来源 Top3（tool/user/system-cache）
-- 最近 5 次请求
+- 主要来源 Top3 与最近 5 次请求
 - 新规则 `contextJump`：
   - 默认 8000 tokens 且窗口 10%
   - 每会话最多 3 条
@@ -91,16 +92,11 @@ dsh plugin --profile <profile> add https://github.com/TMrazbw/dsh-failure-ledger
 - 未知模型回退 flash；不查余额/套餐
 - 金额显示到分（2 位小数）
 
-### 面板
+### 面板排序
 
-- 顶部统计
-- 上下文归因
-- 对话累计下拉
-- 待解决失败（按指纹）
-- 最近失败（含已解决状态）
-- 规则与参数（前置、可编辑）
-- 诊断/统计折叠：Guard 覆盖率、会话下钻、错误源、节省明细
-- 输入区 composer 右侧显示当前会话累计徽标
+- 会话累计、未解决失败、错误源、Guard、按模型节省都按出现频率降序；
+- 最近失败和会话时间线保留时间顺序；
+- “规则与参数”在 Guard 上方。
 
 ## 数据
 
@@ -131,7 +127,7 @@ INBOX.md / _plugin.log
 node --test --test-isolation=none
 ```
 
-当前 175 项测试全部通过。
+当前 176 项测试全部通过。
 
 ## 许可证
 

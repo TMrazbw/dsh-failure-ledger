@@ -262,6 +262,9 @@ test('the panel includes context attribution and its rule controls', async () =>
   assert.match(source, /minDeltaTokens/);
   assert.match(source, /contextTopSources/);
   assert.match(source, /toFixed\(2\)/);
+  assert.match(source, /appearedGuards/);
+  assert.match(source, /collapsedGuards/);
+  assert.match(source, /order: 1/);
 });
 
 test('the client half contains no timers or polling', async () => {

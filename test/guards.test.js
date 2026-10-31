@@ -8,6 +8,8 @@ test('default guards cover the V1 failure classes', () => {
   for (const id of [
     'edit-read-first',
     'search-asar',
+    'unknown-tool',
+    'dependency-missing',
     'path-check',
     'command-path',
     'timeout-scope',

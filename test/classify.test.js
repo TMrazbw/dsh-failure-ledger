@@ -43,6 +43,18 @@ test('unknown command is classified as missing-command', () => {
   assert.equal(result.retryable, false);
 });
 
+test('invented tool names and missing runtime dependencies get their own hints', () => {
+  const invented = classifyError({ message: 'unknown tool "session_search"', code: 'UNKNOWN_TOOL' });
+  assert.equal(invented.category, 'unknown-tool');
+  assert.equal(invented.retryable, false);
+  assert.match(invented.hint, /tool does not exist/i);
+
+  const dependency = classifyError({ message: 'ModuleNotFoundError: No module named zstandard' });
+  assert.equal(dependency.category, 'dependency-missing');
+  assert.equal(dependency.retryable, false);
+  assert.match(dependency.hint, /dependency/i);
+});
+
 test('timeout, context overflow, and tool contract are distinct', () => {
   assert.equal(classifyError({ message: 'command timed out after 120000 ms' }).category, 'timeout');
   assert.equal(classifyError({ message: 'context length exceeded: maximum context 200000' }).category, 'context-overflow');

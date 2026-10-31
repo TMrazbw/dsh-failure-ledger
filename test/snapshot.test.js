@@ -124,8 +124,8 @@ test('buildSnapshot exposes totals, error sources, rules, and conservative money
   const empty = snapshot.sessionStats.find((row) => row.sessionId === 's3');
   assert.equal(empty.failures, 0);
   assert.equal(empty.savedTokens, 0);
-  assert.equal(snapshot.guards.length, 11);
-  assert.equal(snapshot.guardsSummary.total, 11);
+  assert.equal(snapshot.guards.length, 13);
+  assert.equal(snapshot.guardsSummary.total, 13);
   assert.equal(snapshot.guardsSummary.hits, 0);
   assert.deepEqual(snapshot.guardCoverage, {
     unresolvedFingerprints: 2,

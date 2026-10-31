@@ -477,8 +477,32 @@ window.__ModuleLoader__.load({
         .sort((left, right) => right.failures - left.failures)
         .slice(0, 8);
       const routeRows = [...(snapshot?.byRoute ?? [])]
-        .sort((left, right) => right.savedTokens - left.savedTokens)
+        .sort((left, right) => (
+          (toCount(right.failures) - toCount(left.failures))
+          || (toCount(right.savedTokens) - toCount(left.savedTokens))
+        ))
         .slice(0, 8);
+      const allGuards = snapshot?.guards ?? [];
+      const appearedGuards = allGuards
+        .filter((guard) => toCount(guard.hits) > 0)
+        .sort((left, right) => toCount(right.hits) - toCount(left.hits));
+      const visibleGuards = appearedGuards.slice(0, 20);
+      const collapsedGuards = [
+        ...appearedGuards.slice(20),
+        ...allGuards.filter((guard) => toCount(guard.hits) === 0),
+      ];
+      const guardRows = (guards) => guards.map((guard) => [
+        guard.label,
+        guard.id,
+        [guard.tool, guard.category, guard.code].filter(Boolean).join(' · ') || '—',
+        guard.enabled === false ? '—' : '✓',
+        guard.hits,
+        h('button', {
+          type: 'button',
+          style: styles.button,
+          onClick: () => startEditGuard(guard),
+        }, translate('编辑', 'Edit')),
+      ]);
 
       return h('div', { style: styles.page },
         h('header', { style: styles.header },
@@ -717,9 +741,10 @@ window.__ModuleLoader__.load({
             )),
           section(translate('节省明细（按模型）', 'Savings by model'),
             table(
-              [translate('模型', 'Model'), translate('节省 tokens', 'Saved'), translate('预计金额', 'Estimated'), translate('单价', 'Unit price')],
+              [translate('模型', 'Model'), translate('失败次数', 'Failures'), translate('节省 tokens', 'Saved'), translate('预计金额', 'Estimated'), translate('单价', 'Unit price')],
               routeRows.map((row) => [
                 `${row.provider}/${row.model}`,
+                toCount(row.failures),
                 formatTokens(row.savedTokens),
                 formatCNY(row.cny),
                 `${row.unitPricePerMTokens} ${translate('元/百万', 'CNY/M')}`,
@@ -731,7 +756,8 @@ window.__ModuleLoader__.load({
               `Price source: ${snapshot.pricing?.source ?? 'DeepSeek pricing'} (fetched ${snapshot.pricing?.fetchedAt ?? '-'}), mode ${snapshot.pricing?.mode ?? '-'}; read-only and conservative.`,
             ))),
           ),
-          h('div', { style: { ...styles.details, order: 2 } },
+          h('div', { style: { ...styles.details, order: 2, display: 'flex', flexDirection: 'column' } },
+            h('div', { style: { order: 2, minWidth: 0 } },
             section(translate('Guard 规则（查看 / 修改 / 新建）', 'Guard rules (view / edit / create)'),
               h('div', { style: styles.row },
                 h('p', { style: styles.muted }, translate(
@@ -816,20 +842,28 @@ window.__ModuleLoader__.load({
               ) : null,
               table(
                 [translate('Guard', 'Guard'), translate('ID', 'ID'), translate('匹配', 'Match'), translate('启用', 'On'), translate('命中', 'Hits'), translate('操作', 'Action')],
-                (snapshot.guards ?? []).map((guard) => [
-                  guard.label,
-                  guard.id,
-                  [guard.tool, guard.category, guard.code].filter(Boolean).join(' · ') || '—',
-                  guard.enabled === false ? '—' : '✓',
-                  guard.hits,
-                  h('button', {
-                    type: 'button',
-                    style: styles.button,
-                    onClick: () => startEditGuard(guard),
-                  }, translate('编辑', 'Edit')),
-                ]),
-                translate('暂无 Guard', 'No guards'),
+                guardRows(visibleGuards),
+                translate('暂无已出现 Guard', 'No guards have appeared yet'),
+              ),
+              h('p', { style: styles.muted }, translate(
+                `已出现 ${appearedGuards.length} 条，显示前 ${Math.min(appearedGuards.length, 20)} 条；超出 20 条与未出现的规则已收起。`,
+                `${appearedGuards.length} guards have appeared; showing the first ${Math.min(appearedGuards.length, 20)}. Overflow beyond 20 and unseen rules are collapsed.`,
               )),
+              collapsedGuards.length > 0
+                ? h('details', { style: { ...styles.details, marginTop: '8px' } },
+                  h('summary', { style: styles.summary }, translate(
+                    `更多 Guard（超出 20 / 未出现）：${collapsedGuards.length} 条`,
+                    `More guards (overflow / unseen): ${collapsedGuards.length}`,
+                  )),
+                  table(
+                    [translate('Guard', 'Guard'), translate('ID', 'ID'), translate('匹配', 'Match'), translate('启用', 'On'), translate('命中', 'Hits'), translate('操作', 'Action')],
+                    guardRows(collapsedGuards),
+                    '',
+                  ))
+                : null,
+            ),
+            ),
+            h('div', { style: { order: 1, minWidth: 0 } },
             section(translate('规则与参数', 'Rules and parameters'),
             writable
               ? h('p', { style: styles.muted }, translate(
@@ -890,6 +924,7 @@ window.__ModuleLoader__.load({
                     true,
                   )));
               })))),
+            ),
         ),
       );
     }
@@ -939,8 +974,8 @@ window.__ModuleLoader__.load({
           card(translate('本会话花费', 'Session spend'), costCNY == null ? '—' : formatCNY(costCNY)),
           card(translate('压缩 / 重置', 'Compactions'), String(toCount(context?.compactionCount)))),
         h('p', { style: styles.muted }, translate(
-          `主要来源：${topSources.length === 0 ? '—' : topSources.map(([source, tokens]) => `${contextSourceLabel(source)} ${formatTokens(tokens)}`).join(' · ')}`,
-          `Top sources: ${topSources.length === 0 ? '—' : topSources.map(([source, tokens]) => `${contextSourceLabel(source)} ${formatTokens(tokens)}`).join(' · ')}`,
+          `主要来源：${topSources.length === 0 ? '—' : topSources.map(([source, tokens, count]) => `${contextSourceLabel(source)} ${formatTokens(tokens)}（${count} 次）`).join(' · ')}`,
+          `Top sources: ${topSources.length === 0 ? '—' : topSources.map(([source, tokens, count]) => `${contextSourceLabel(source)} ${formatTokens(tokens)} (${count}x)`).join(' · ')}`,
         )),
         table(
           [
@@ -977,9 +1012,13 @@ window.__ModuleLoader__.load({
         const delta = Number(entry?.delta);
         if (!Number.isFinite(delta) || delta <= 0 || entry?.compaction === true) continue;
         const source = entry?.source ?? 'unknown';
-        totals.set(source, (totals.get(source) ?? 0) + delta);
+        const current = totals.get(source) ?? { count: 0, tokens: 0 };
+        totals.set(source, { count: current.count + 1, tokens: current.tokens + delta });
       }
-      return [...totals.entries()].sort((left, right) => right[1] - left[1]).slice(0, 3);
+      return [...totals.entries()]
+        .map(([source, value]) => [source, value.tokens, value.count])
+        .sort((left, right) => (right[2] - left[2]) || (right[1] - left[1]))
+        .slice(0, 3);
     }
 
     function contextTurnDelta(series) {
@@ -1279,7 +1318,11 @@ function groupFailureRows(rows) {
     }
   }
   return [...groups.values()]
-    .sort((left, right) => Date.parse(right.lastSeen) - Date.parse(left.lastSeen))
+    .sort((left, right) => {
+      const countDelta = (right.count ?? 0) - (left.count ?? 0);
+      if (countDelta !== 0) return countDelta;
+      return Date.parse(right.lastSeen) - Date.parse(left.lastSeen);
+    })
     .map((group) => ({
       fingerprint: group.fingerprint,
       count: group.count,
