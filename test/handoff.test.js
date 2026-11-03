@@ -10,7 +10,10 @@ test('renderHandoff emits goal, done, open failures, and key facts', () => {
     view: {
       handoff: {
         goal: '修复登录',
-        successes: [{ tool: 'edit', args: { file: 'a.js' }, at: 1_800_000_000_000 }],
+        successes: [
+          { tool: 'edit', args: { file_path: 'a.js', old_string: 'SECRET OLD', new_string: 'SECRET NEW' }, at: 1_800_000_000_000 },
+          { tool: 'pwsh', args: { command: 'SECRET COMMAND', description: 'Run tests' }, at: 1_800_000_000_000 },
+        ],
       },
       context: { window: 100_000, lastInputTokens: 12_000, lastOutputTokens: 1_000 },
       usage: { requests: 3 },
@@ -26,6 +29,9 @@ test('renderHandoff emits goal, done, open failures, and key facts', () => {
   assert.match(markdown, /修复登录/);
   assert.match(markdown, /## Done/);
   assert.match(markdown, /edit/);
+  assert.match(markdown, /a\.js/);
+  assert.match(markdown, /Run tests/);
+  assert.doesNotMatch(markdown, /SECRET OLD|SECRET NEW|SECRET COMMAND/);
   assert.match(markdown, /## Next \/ Open failures/);
   assert.match(markdown, /fp-a · edit\/edit-target · 2 次/);
   assert.match(markdown, /未验证完成声明/);

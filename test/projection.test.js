@@ -121,6 +121,28 @@ test('context attribution is folded into the projection and contextJump rule', (
   assert.equal(view.n2 >= 1, true);
 });
 
+test('user goal is captured for handoff', () => {
+  const state = fold({ id: 's1' }, [
+    ev('user/message', { content: [{ type: 'text', text: '修复登录接口' }] }, 1),
+  ]);
+  const view = createAnomalyView(state);
+  assert.equal(view.handoff.goal, '修复登录接口');
+});
+
+test('an internal failure notice does not overwrite the user goal', () => {
+  const state = fold({ id: 's1' }, [
+    ev('user/message', { content: [{ type: 'text', text: '修复登录接口' }] }, 1),
+    ev('user/message', {
+      content: [{
+        type: 'text',
+        text: '[dsh-failure-ledger] pwsh failed · UNKNOWN\nInspect the error before retrying.\nReport: D:\\tmp\\r.md',
+      }],
+    }, 2),
+  ]);
+  const view = createAnomalyView(state);
+  assert.equal(view.handoff.goal, '修复登录接口');
+});
+
 test('claimWithoutEvidence is projected from edit and claim events', () => {
   const state = fold({ id: 's1', createdAt: T }, [
     ev('turn/start', { turn: 1 }, 1),

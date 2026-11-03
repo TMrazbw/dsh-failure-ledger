@@ -17,6 +17,7 @@ test('apply registers the listener, projection, and failure_inbox tool', async (
   const tools = [];
   const routes = [];
   const commands = [];
+  const sections = [];
   const ctx = {
     on(name, listener) {
       handlers.push({ name, listener });
@@ -37,6 +38,12 @@ test('apply registers the listener, projection, and failure_inbox tool', async (
         tools: {
           register(definition) {
             tools.push(definition);
+            return () => {};
+          },
+        },
+        systemPrompt: {
+          section(definition) {
+            sections.push(definition);
             return () => {};
           },
         },
@@ -115,6 +122,9 @@ test('apply registers the listener, projection, and failure_inbox tool', async (
   assert.ok(openTool);
   assert.deepEqual(inboxTool.parameters.properties.action.enum, ['list', 'unresolved', 'show', 'resolve', 'stats', 'playbook', 'handoff']);
   assert.match(openTool.description, /conversation anomaly statistics/i);
+  assert.equal(sections.length, 1);
+  assert.match(sections[0].text, /failure_inbox/);
+  assert.match(sections[0].text, /handoff/);
   assert.equal(routes.length, 3);
   assert.equal(routes[0].path, '/api/failure-ledger.snapshot');
   assert.deepEqual(Array.from(routes[0].methods), ['GET']);

@@ -213,7 +213,9 @@ test('the failure_inbox tool has the expected schema and executes with the sessi
   assert.match(stats, /session: n1=2 n2=1 saved=10/);
 
   const handoff = await tool.execute({ action: 'handoff' }, { agent });
-  assert.match(handoff, /Handoff written: \/tmp\/handoff.md/);
+  assert.match(handoff, /已调用：failure_inbox/);
+  assert.match(handoff, /做了什么：写入事实型交接文件 \/tmp\/handoff\.md/);
+  assert.match(handoff, /你该怎么做：新开会话/);
 });
 
 test('digest persistence triggers an INBOX refresh when wired', async (t) => {

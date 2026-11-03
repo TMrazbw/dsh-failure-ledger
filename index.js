@@ -133,6 +133,14 @@ export function apply(ctx, config = {}) {
     return store.writeHandoff(sessionId, markdown);
   };
 
+  ctx.inject(['systemPrompt'], (promptCtx) => {
+    promptCtx.effect(() => promptCtx.systemPrompt.section({
+      name: 'dfl:handoff-on-switch',
+      order: 1460,
+      text: 'When the user indicates they want to switch/end this conversation (for example 换对话, 新开一个对话, 下次继续, 先到这里) and there is meaningful current work, call failure_inbox with action="handoff" before your final answer. After it succeeds, reply with: (1) the called action, (2) the handoff file path and what was written, (3) the exact next step: open a new conversation and send "读取 <path>，从 Next 继续". Do not call it when there is no meaningful work.',
+    }));
+  });
+
   ctx.inject(['tools'], (toolCtx) => {
     toolCtx.effect(() => {
       const disposers = [

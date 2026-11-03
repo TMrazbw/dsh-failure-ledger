@@ -11,6 +11,8 @@ test('unstick fires on the second failure for one session/fingerprint only', () 
   assert.equal(tracker.observe(input), false);
   assert.equal(UNSTICK_GUARD.action, 'hint');
   assert.match(UNSTICK_GUARD.hint, /Same failure twice/);
+  assert.match(UNSTICK_GUARD.hint, /ds_skill\("unstick"\)/, 'points at the DSK method when it is installed');
+  assert.ok(UNSTICK_GUARD.hint.length <= 320, 'stays inside the hint budget');
 });
 
 test('unstick keeps sessions and fingerprints separate', () => {
