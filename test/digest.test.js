@@ -221,6 +221,18 @@ test('unresolved and persisted callbacks receive the failure', async () => {
   assert.equal(persisted[0].tool, 'pwsh');
 });
 
+test('repeat failure callback fires on the second persisted fingerprint', async () => {
+  const repeats = [];
+  const handler = createDigestHandler({
+    store: fakeStore(),
+    onRepeatFailure: (entry) => repeats.push(entry.fingerprint),
+  });
+  await handler.listener(makeExec({ callId: 'one' }), failureResult(), accept);
+  await handler.listener(makeExec({ callId: 'two' }), failureResult(), accept);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(repeats.length, 1);
+});
+
 test('successful results and synthetic aborted results are ignored', async () => {
   const store = fakeStore();
   const handler = createDigestHandler({ store });

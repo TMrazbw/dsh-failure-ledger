@@ -23,6 +23,7 @@ window.__ModuleLoader__.load({
     const CONFIG_ENTRY = 'failure-ledger';
     const SNAPSHOT_URL = 'api/failure-ledger.snapshot';
     const ADMIN_URL = 'api/failure-ledger.admin';
+    const HANDOFF_URL = 'api/failure-ledger.handoff';
 
     const RULE_ROWS = [
       ['repeatFailure', '重复失败', 'Repeated failure', [
@@ -46,6 +47,7 @@ window.__ModuleLoader__.load({
         ['minWindowRatio', '最小窗口占比', 'Min window ratio'],
         ['maxHitsPerSession', '每会话最多', 'Max hits per session'],
       ]],
+      ['claimWithoutEvidence', '无证据完成', 'Claim without evidence', []],
       ['maxTokens', 'max-tokens 截断', 'max-tokens truncation', []],
       ['abortedTurn', '中止回合', 'Aborted turn', []],
       ['subagentFailure', '子代理失败', 'Subagent failure', []],
@@ -249,6 +251,9 @@ window.__ModuleLoader__.load({
       const [guardDraft, setGuardDraft] = useState(null);
       const [guardSaving, setGuardSaving] = useState(false);
       const [guardError, setGuardError] = useState(null);
+      const [handoffBusy, setHandoffBusy] = useState(false);
+      const [handoffPath, setHandoffPath] = useState('');
+      const [handoffError, setHandoffError] = useState('');
       let liveProjection = null;
       try {
         if (typeof props?.useProjection === 'function') {
@@ -317,6 +322,28 @@ window.__ModuleLoader__.load({
         ?? liveProjection?.context
         ?? snapshot?.context
         ?? null;
+
+      async function createHandoff() {
+        if (!selectedStats?.sessionId) return;
+        setHandoffBusy(true);
+        setHandoffError('');
+        setHandoffPath('');
+        try {
+          const response = await fetch(HANDOFF_URL, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'content-type': 'application/json', accept: 'application/json' },
+            body: JSON.stringify({ sessionId: selectedStats.sessionId }),
+          });
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok || data?.ok === false) throw new Error(data?.error ?? `handoff HTTP ${response.status}`);
+          setHandoffPath(String(data.path ?? ''));
+        } catch (cause) {
+          setHandoffError(errorText(cause));
+        } finally {
+          setHandoffBusy(false);
+        }
+      }
       const writable = snapshot != null;
       const rules = mergeRules(snapshot?.rules, draft?.rules);
       const digest = { ...(snapshot?.config?.digest ?? {}), ...(draft?.digest ?? {}) };
@@ -558,7 +585,15 @@ window.__ModuleLoader__.load({
                   sessionStats.map((row) => h('option', {
                     key: row.sessionId,
                     value: row.sessionId,
-                  }, row.title || shortId(row.sessionId))))),
+                  }, row.title || shortId(row.sessionId)))),
+                  h('button', {
+                    type: 'button',
+                    style: { ...styles.button, opacity: handoffBusy || !selectedStats ? 0.5 : 1 },
+                    disabled: handoffBusy || !selectedStats,
+                    onClick: () => void createHandoff(),
+                  }, handoffBusy ? translate('生成中…', 'Writing…') : translate('生成交接', 'Create handoff'))),
+                handoffPath ? h('p', { style: styles.muted }, `${translate('交接文件：', 'Handoff: ')}${handoffPath}`) : null,
+                handoffError ? h('p', { style: styles.error, role: 'alert' }, handoffError) : null,
                 selectedStats ? table(
                   [translate('对话', 'Conversation'), translate('失败', 'Failures'), translate('异常', 'Anomalies'), translate('节省 tokens', 'Saved tokens')],
                   [[

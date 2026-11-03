@@ -195,10 +195,11 @@ test('the failure_inbox tool has the expected schema and executes with the sessi
   const tool = createFailureInboxTool({
     store,
     getSessionStats: () => ({ n1: 2, n2: 1, savedTokens: 10 }),
+    getHandoff: async () => ({ ok: true, path: '/tmp/handoff.md' }),
   });
 
   assert.equal(tool.name, 'failure_inbox');
-  assert.deepEqual(tool.parameters.properties.action.enum, ['list', 'unresolved', 'show', 'resolve', 'stats', 'playbook']);
+  assert.deepEqual(tool.parameters.properties.action.enum, ['list', 'unresolved', 'show', 'resolve', 'stats', 'playbook', 'handoff']);
   assert.equal(tool.parameters.required[0], 'action');
   assert.equal(tool.output.schema.type, 'string');
   assert.equal(typeof tool.execute, 'function');
@@ -210,6 +211,9 @@ test('the failure_inbox tool has the expected schema and executes with the sessi
 
   const stats = await tool.execute({ action: 'stats' }, { agent });
   assert.match(stats, /session: n1=2 n2=1 saved=10/);
+
+  const handoff = await tool.execute({ action: 'handoff' }, { agent });
+  assert.match(handoff, /Handoff written: \/tmp\/handoff.md/);
 });
 
 test('digest persistence triggers an INBOX refresh when wired', async (t) => {

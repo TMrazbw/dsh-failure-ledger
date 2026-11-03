@@ -29,6 +29,7 @@ import {
 import { PROJECTION_KEY, createFailureLedgerProjection } from './lib/projection.js';
 import { createSnapshotRoute, buildSnapshot } from './lib/snapshot.js';
 import { createStore } from './lib/store.js';
+import { createHandoffRoute, renderHandoff } from './lib/handoff.js';
 import { createTokenWasteGuard } from './lib/token-waste.js';
 import { createSelfHealTracker } from './lib/self-heal.js';
 
@@ -114,10 +115,28 @@ export function apply(ctx, config = {}) {
     }
   };
 
+  const listSessionFailures = async (sessionId) => {
+    try {
+      const listed = await store.listFailures({ limit: 500, scope: 'all' });
+      return (listed.entries ?? []).filter((entry) => String(entry.session) === String(sessionId));
+    } catch {
+      return [];
+    }
+  };
+
+  const writeHandoffForAgent = async (agent) => {
+    const sessionId = agent?.id ?? agent?.session?.id ?? null;
+    if (sessionId == null) return { ok: false, error: 'session_required' };
+    const view = getSessionStats(agent);
+    const failures = await listSessionFailures(sessionId);
+    const markdown = renderHandoff({ sessionId, view, failures, now: Date.now() });
+    return store.writeHandoff(sessionId, markdown);
+  };
+
   ctx.inject(['tools'], (toolCtx) => {
     toolCtx.effect(() => {
       const disposers = [
-        toolCtx.tools.register(createFailureInboxTool({ store, getSessionStats })),
+        toolCtx.tools.register(createFailureInboxTool({ store, getSessionStats, getHandoff: writeHandoffForAgent })),
         toolCtx.tools.register(createOpenPanelTool()),
       ];
       return () => {
@@ -193,6 +212,25 @@ export function apply(ctx, config = {}) {
         }
       }
       return views;
+    };
+
+    const writeHandoffForSession = async (sessionId) => {
+      let observation = null;
+      try {
+        observation = await connectionCtx.sessionQuery.observeSession(sessionId, { projectionMode: 'all' });
+        const view = observation?.projections?.values?.[PROJECTION_KEY] ?? null;
+        const failures = await listSessionFailures(sessionId);
+        const markdown = renderHandoff({ sessionId, view, failures, now: Date.now() });
+        return await store.writeHandoff(sessionId, markdown);
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      } finally {
+        try {
+          observation?.dispose?.();
+        } catch {
+          // Ignore observation disposal failures.
+        }
+      }
     };
 
     const readArchivedSessionIds = async () => {
@@ -285,9 +323,13 @@ export function apply(ctx, config = {}) {
           }
         },
       }));
+      const disposeHandoff = connectionCtx.connection.fetch.register(createHandoffRoute({
+        getHandoff: writeHandoffForSession,
+      }));
       return () => {
         disposeSnapshot();
         disposeAdmin();
+        disposeHandoff();
       };
     });
   });
@@ -302,6 +344,11 @@ export function apply(ctx, config = {}) {
     },
     onGuardHit: ({ session, guard }) => {
       if (settings.guards.hint !== false && guard?.action !== 'observe') {
+        hintQueue.push(session, guard);
+      }
+    },
+    onRepeatFailure: ({ session, guard }) => {
+      if (settings.guards.hint !== false && session) {
         hintQueue.push(session, guard);
       }
     },

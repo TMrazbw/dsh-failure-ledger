@@ -137,6 +137,21 @@ test('contextJump is bounded per session and ignores compaction', () => {
   assert.equal(hit.hits.some((entry) => entry.evidence.source === 'compaction'), false);
 });
 
+test('claimWithoutEvidence needs a claim after an unverified edit', () => {
+  const base = {
+    lastEditAt: 100,
+    lastEditTool: 'edit',
+    lastVerifyAt: 0,
+    lastClaimAt: 110,
+    lastClaimText: '已修复',
+    lastClaimTurn: 1,
+  };
+  assert.equal(evaluateRules({ claim: base }, {}).byRule.claimWithoutEvidence.length, 1);
+  assert.equal(evaluateRules({ claim: { ...base, lastVerifyAt: 120 } }, {}).byRule.claimWithoutEvidence, undefined);
+  assert.equal(evaluateRules({ claim: { ...base, lastClaimAt: 90 } }, {}).byRule.claimWithoutEvidence, undefined);
+  assert.equal(evaluateRules({ claim: { ...base, lastEditAt: 0 } }, {}).byRule.claimWithoutEvidence, undefined);
+});
+
 test('maxTokens and abortedTurn read turn/end reasons', () => {
   assert.equal(evaluateRules({ turn: { reason: { kind: 'max-tokens' } } }, {}).byRule.maxTokens.length, 1);
   assert.equal(evaluateRules({ turn: { reason: { kind: 'completed' } } }, {}).byRule.maxTokens, undefined);

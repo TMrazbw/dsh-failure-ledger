@@ -121,6 +121,19 @@ test('context attribution is folded into the projection and contextJump rule', (
   assert.equal(view.n2 >= 1, true);
 });
 
+test('claimWithoutEvidence is projected from edit and claim events', () => {
+  const state = fold({ id: 's1', createdAt: T }, [
+    ev('turn/start', { turn: 1 }, 1),
+    ev('tool/call', { turn: 1, step: 1, callId: 'e1', name: 'edit' }, 2),
+    ev('tool/result', { turn: 1, step: 1, message: { toolCallId: 'e1', isError: false } }, 3),
+    ev('assistant/message', { turn: 1, step: 1, message: { content: [{ type: 'text', text: '已修复' }] } }, 4),
+  ]);
+  const view = createAnomalyView(state);
+  assert.equal(view.claim.lastEditTool, 'edit');
+  assert.equal(view.claim.lastClaimText, '已修复');
+  assert.equal(view.byRule.claimWithoutEvidence, 1);
+});
+
 test('the projection state is pure and replays identically', () => {
   const header = { id: 's1', createdAt: T };
   const first = fold(header, threeFailures());

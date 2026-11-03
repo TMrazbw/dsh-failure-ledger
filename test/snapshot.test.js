@@ -41,6 +41,7 @@ test('normalizeHostConfig merges defaults, rules, and savings', () => {
   assert.equal(config.rules.repeatFailure.threshold, 5);
   assert.equal(config.rules.repeatFailure.windowMinutes, 10);
   assert.equal(config.rules.maxTokens.enabled, true);
+  assert.equal(config.rules.claimWithoutEvidence.enabled, true);
   assert.equal(config.savings.priceMode, 'peakCacheMiss');
   assert.equal(config.savings.customUnitPricePerMTokens, 3);
 

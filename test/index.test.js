@@ -113,13 +113,15 @@ test('apply registers the listener, projection, and failure_inbox tool', async (
   const openTool = tools.find((tool) => tool.name === 'open_failure_ledger');
   assert.ok(inboxTool);
   assert.ok(openTool);
-  assert.deepEqual(inboxTool.parameters.properties.action.enum, ['list', 'unresolved', 'show', 'resolve', 'stats', 'playbook']);
+  assert.deepEqual(inboxTool.parameters.properties.action.enum, ['list', 'unresolved', 'show', 'resolve', 'stats', 'playbook', 'handoff']);
   assert.match(openTool.description, /conversation anomaly statistics/i);
-  assert.equal(routes.length, 2);
+  assert.equal(routes.length, 3);
   assert.equal(routes[0].path, '/api/failure-ledger.snapshot');
   assert.deepEqual(Array.from(routes[0].methods), ['GET']);
   assert.equal(routes[1].path, '/api/failure-ledger.admin');
   assert.deepEqual(Array.from(routes[1].methods), ['POST']);
+  assert.equal(routes[2].path, '/api/failure-ledger.handoff');
+  assert.deepEqual(Array.from(routes[2].methods), ['POST']);
   assert.match(DEFAULT_REPORT_ROOT, /failure-reports/);
 
   await cleanups[0]();
