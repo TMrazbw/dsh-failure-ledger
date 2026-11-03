@@ -7,7 +7,7 @@ DSH Harness 的 **profile 级 Host + Client 插件**：压缩大型工具错误�
 - 进度日志：`PROGRESS.md`
 - GitHub：**https://github.com/TMrazbw/dsh-failure-ledger**（Public / MIT）
 - 当前版本：**V2.8（194 tests pass）：换对话意图由 Agent 调用 handoff，不再提供按钮；Goal 只取真实用户消息（跳过 runner 注入块与 DFL 通知），Done 只写路径/命令摘要；package `0.1.2`；live 复核通过（2026-11-03 第 4 次）**
-- 已发布基线：**V2.0（151 tests、commit `fc3deb8`）→ V2.5（155 tests、commit `f9aa8f2`）→ V2.6（175 tests、commit `8456810`）→ UI/分类（176 tests、commit `c060e5f`）→ V2.7（188 tests、commit `d348154`）**
+- 已发布基线：**V2.0（151 tests、commit `fc3deb8`）→ V2.5（155 tests、commit `f9aa8f2`）→ V2.6（175 tests、commit `8456810`）→ UI/分类（176 tests、commit `c060e5f`）→ V2.7（188 tests、commit `d348154`）→ V2.8（194 tests、commit `d81c818`）**
 
 ## 目标（V1）
 
